@@ -1,0 +1,1179 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+\usepackage{longtable}
+\usepackage{xcolor}
+
+\newcommand{\Analog}{\textsc{Analog}}
+\newcommand{\None}{\textsc{None (Analog)}}
+\newcommand{\Alternating}{\textsc{Alternating}}
+\newcommand{\FullSpiking}{\textsc{Full Spiking}}
+\newcommand{\HybridLate}{\textsc{Hybrid Late}}
+\newcommand{\HybridEarly}{\textsc{Hybrid Early}}
+\newcommand{\HybridMid}{\textsc{Hybrid Mid}}
+
+\newtcolorbox{keypoint}{%
+  colback=black!3, colframe=black!60, boxrule=0.6pt, arc=1pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt
+}
+\newtcolorbox{supersede}{%
+  colback=yellow!8, colframe=orange!70!black, boxrule=0.8pt, arc=1pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt
+}
+
+\title{\Large Rotation Invariance in Spiking and Analog\\
+$p4$-Equivariant CNNs\\[4pt]
+\large Consolidated Findings Report}
+\author{Sahil Singh\\
+CMI Summer Research Internship\\
+Supervisor: Prof. K.V. Subrahmanyam}
+\date{August 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report consolidates four previously separate reports and two post-hoc corrections into one
+internally consistent record, spanning a full-capacity (7-layer, 10-channel, 24{,}744-parameter) $p4$-equivariant
+spiking/analog CNN and a reduced-capacity (5-layer, 4-channel, 2{,}420-parameter) companion model run
+under two independent training regimes, plus a follow-up ``Priority Experimental Programme'' (Experiments
+2--4: spike placement, layer/time representation distance, and Fourier analysis of the rotational response).
+No new experiments are run and no model is retrained here --- every table and figure reads from results
+already produced across the four source reports, plus two corrections applied to the analysis code
+after a code-vs-methodology audit uncovered two genuine metric-design issues (a fixed epsilon
+inappropriate for a narrow layer, and single-draw Monte-Carlo noise in a stochastic spike-encoding
+comparison). The findings that survive scrutiny at every capacity and regime tested: a
+depth-wise representational collapse at the deepest layer(s), present even in the zero-spiking control,
+identifying it as an architectural rather than spiking signature; a rise-then-plateau (not decay)
+temporal rotation-sensitivity pattern, contradicting this project's original temporal-averaging
+hypothesis; a clean, reproducible relationship between spiking depth and how many timesteps are needed
+before rotation-robust accuracy appears; and, in Experiment 4, the cleanest confirmation in the project
+of the $p4$ architecture's exact discrete-symmetry guarantee. Two findings required real correction on
+top of that: the reduced-capacity model's group-angle equivariance error, and its layer/time
+representation-distance metric at the narrowest layer, both of which were substantially distorted by
+metric-design artifacts rather than reflecting the underlying model. Both are corrected here and the
+corrected numbers explicitly supersede the originals.
+\end{abstract}
+
+\tableofcontents
+
+% ===========================================================================
+\section{How to Read This Report}
+\label{sec:part0}
+
+This document consolidates four previously separate reports and two post-hoc corrections into a
+single, internally consistent record. It reproduces no new experiments and trains no new models ---
+every table and figure below reads from results already on disk in \texttt{\textasciitilde/snn/} at the
+time of writing.
+
+\paragraph{The four source reports being merged.}
+\begin{itemize}[leftmargin=1.6em]
+\item \textbf{Report 1} (``full-capacity companion report''): 7-layer, 10-channel, 24{,}744-parameter
+\texttt{SpikingP4CNNSmall}, $T=50$ simulation timesteps, 20 training epochs, 4 spike-placement
+configurations, 3 seeds. File: \texttt{findings\_report.tex} / \texttt{findings\_report.pdf}.
+\item \textbf{Report 2} (``reduced-capacity companion report''): 5-layer, 4-channel, 2{,}420-parameter
+\texttt{SpikingP4CNNSmall}, run under two independent regimes ($T{=}50$/10ep and $T{=}30$/5ep), 5
+spike-placement configurations, 3 seeds. Files: \texttt{findings\_report\_small.tex} (both regimes) and
+\texttt{findings\_report\_t30.tex} ($T{=}30$ regime, revised after seed 1 arrived, more cautious framing
+of the group-angle-error finding).
+\item \textbf{Report 3} (``Priority Experimental Programme, Experiments 2--4''): Experiment 2 (spike
+placement vs.\ accuracy/$E_{90}$), Experiment 3 (layer/time representation distance $D_{\ell,t}$), and
+Experiment 4 (Fourier decomposition of the rotation response), run on the same reduced-capacity
+checkpoints as Report 2, both regimes, no retraining. File: \texttt{findings\_report\_experiments234.tex}.
+\item \textbf{The corrections.} A code-vs-methodology audit of three specific anomalies raised across
+Reports 2 and 3, followed by two concrete fixes applied to the analysis code: Fix 1 (a layer-relative
+epsilon and floor-masking for the $D_{\ell,t}$ metric) and Fix 2 (multi-draw Monte-Carlo averaging for
+the $E_{90}$ direct-equivariance-error statistic). No model, training, or architecture code was touched
+by either fix --- both are corrections to analysis/metric code only.
+\end{itemize}
+
+\begin{supersede}
+\textbf{Superseding notice.} The $E_{90}$ numbers in Section~\ref{sec:part5} and the $D_{\ell,t}$
+numbers in Section~\ref{sec:part6} \emph{supersede} the equivalent single-draw / fixed-epsilon numbers
+reported in Reports 2 and 3. Every place this applies is flagged inline with the word ``supersedes''
+rather than left implicit. The mechanism behind both corrections is explained once, in
+Section~\ref{sec:part1}'s closing subsection, and referenced from Sections~\ref{sec:part5}/\ref{sec:part6}
+as ``the correction described in Section~\ref{sec:part1}'' rather than re-explained.
+\end{supersede}
+
+\paragraph{Reading order.} Sections~\ref{sec:part1}--\ref{sec:part2} establish shared setup and the
+accuracy backdrop against which every other finding should be read. Sections~\ref{sec:part3}--\ref{sec:part8}
+present the substantive findings, one experiment family per section, each explicitly stating which
+report(s) and which regime(s) it draws from. Section~\ref{sec:part9} is a permanent settled-questions
+record of the code-vs-methodology audit, so this project's anomalies are not re-investigated by a future
+reader. Section~\ref{sec:part10} synthesizes at the confidence level each finding actually supports.
+Section~\ref{sec:part11} consolidates limitations and next steps against the current deadlines.
+
+\FloatBarrier
+
+% ===========================================================================
+\section{Setup}
+\label{sec:part1}
+
+\subsection{Architecture}
+
+Both variants share the same qualitative design: a stack of $p4$-equivariant convolutions
+(\texttt{P4ConvZ2} lifting the input into the $p4$ group, then \texttt{P4ConvP4} layers operating within
+it), \texttt{P4BatchNorm2d} (sharing statistics and affine parameters across the 4 orientation channels
+--- see the callout below), a final group-pooling step (max over the 4 orientation channels) producing
+an orientation-invariant feature map, and a linear classifier. Full implementation:
+\texttt{gconv\_small.py} (\texttt{P4ConvZ2} / \texttt{P4ConvP4} / \texttt{P4BatchNorm2d} /
+\texttt{P4GroupPool}) and \texttt{p4cnn\_small.py} / \texttt{spiking\_p4cnn\_small.py} (the analog and
+spiking network definitions).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & \textbf{Full-capacity variant} & \textbf{Reduced-capacity variant} \\
+\midrule
+Layers & 7 & 5 \\
+Channels per layer & 10 & 4 \\
+Parameters & 24{,}744 & 2{,}420 ($10.2\times$ fewer) \\
+Kernels & six $3\times3$ + one $4\times4$ (valid) & $3\times3$ throughout, two $2\times2$ maxpools \\
+Used in & Report 1 only & Reports 2 and 3 \\
+\bottomrule
+\end{tabular}
+\caption{Architecture comparison.}
+\end{table}
+
+\begin{keypoint}
+\texttt{P4BatchNorm2d} exists because standard BatchNorm assigns each of the 4 orientation channels
+independent running statistics, which breaks the architecture's equivariance guarantee once trained
+upright-only (verified: untrained equivariance error $\sim 10^{-6}$; after training with standard
+BatchNorm, $\sim 0.1$--$0.2$). Sharing statistics and affine parameters across the 4 orientation channels
+restores equivariance to $\sim 10^{-6}$ even after training. This fix is used throughout every result in
+this document --- it is a settled, resolved issue, listed here for completeness and cross-referenced
+from Section~\ref{sec:part9}.
+\end{keypoint}
+
+\subsection{Task}
+4-class rotated-MNIST: digits $\{3,4,8,9\}$, chosen because none is rotationally self-symmetric under
+$90^\circ/180^\circ$. Models are trained on upright ($0^\circ$) images only and evaluated on a 24-angle
+sweep, $\theta \in \{0^\circ, 15^\circ, \ldots, 345^\circ\}$, on the held-out test split (Reports 1--2)
+or a fixed probe set (Report 3 --- see Sections~\ref{sec:part5}--\ref{sec:part7} setup notes).
+
+\subsection{Spike-Placement Configurations and Which Report Trained Which}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Configuration} & \textbf{Spiking layers} & \textbf{Full-cap.\ (Report 1)} & \textbf{Reduced-cap.\ (Reports 2--3)} \\
+\midrule
+Analog / None & none & yes (``Analog'') & yes (``None'') \\
+Alternating & interleaved (2,4,6 full-cap; 2,4 reduced) & yes & yes \\
+Full Spiking & all layers & yes & yes \\
+Hybrid Late & final layer only & yes & yes \\
+Hybrid Early & first 1--2 layers & not trained --- see note & yes \\
+Hybrid Mid & middle layers & not trained --- see note & does not exist at depth 5 \\
+\bottomrule
+\end{tabular}
+\caption{Configuration coverage by report.}
+\end{table}
+
+\noindent\textit{Note: Report 1 explicitly states \HybridEarly\ and \HybridMid\ were implemented in the
+codebase but not yet trained under its corrected setup, so Report 1 says nothing about them. Both were
+trained for the reduced-capacity model (Reports 2--3); \HybridMid\ has no reduced-capacity analogue
+since a 5-layer network has no distinct ``middle'' block the way a 7-layer network does.}
+
+\subsection{Training Regimes and Seed Counts}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}llccccp{4.1cm}l@{}}
+\toprule
+\textbf{Regime} & \textbf{Model} & $T$ & \textbf{Epochs} & \textbf{Params} & \textbf{Seeds} & \textbf{Repr.\ analysis coverage} & \textbf{Used by} \\
+\midrule
+Full-capacity & 7L/10ch & 50 & 20 & 24{,}744 & 3 & all 3 seeds & Report 1 \\
+Regime A & 5L/4ch & 50 & 10 & 2{,}420 & 3 & all 3 seeds & Reports 2, 3 \\
+Regime B & 5L/4ch & 30 & 5 & 2{,}420 & 3 & seeds 0--1 only$^{*}$ & Reports 2, 3 \\
+\bottomrule
+\end{tabular}
+\caption{Training regimes. All regimes: Poisson/Bernoulli rate coding, Adam, lr $10^{-3}$, batch 64,
+best checkpoint by $0^\circ$ test accuracy, \texttt{gpuserver.cmi.ac.in}. $^{*}$Seed 2's
+representation-level analysis was intentionally left incomplete, by explicit instruction (all 3 seeds
+were trained to completion in every regime).}
+\end{table}
+
+\subsection{The Two Corrections (Referenced Throughout as ``the Correction Described in Section~\ref{sec:part1}'')}
+\label{sec:corrections}
+
+Both corrections were produced by a code-vs-methodology audit that investigated three specific
+anomalies raised in Reports 2--3 (full detail and verdicts in Section~\ref{sec:part9}). Two of the three
+anomalies turned out to be genuine methodological artifacts worth correcting in the analysis code ---
+not bugs in the model, training, or the $p4$-equivariant conv/BatchNorm implementation, which was
+independently verified to have no mode-dependent branching.
+
+\paragraph{Fix 1 ($D_{\ell,t}$ epsilon).} A single fixed epsilon ($10^{-8}$) is added to a reference-norm
+denominator when computing the layer/time representation distance $D_{\ell,t}(\theta)$ (Report 3,
+Experiment 3). At the network's narrowest layer (layer 5, 16 units), the true reference norm is
+legitimately exactly zero for a nontrivial fraction of (timestep, image) cells --- dividing by the
+$10^{-8}$ floor rather than a real signal produced the reported $\sim 10^7$ blowups. Fix: a per-layer
+epsilon ($\max(10^{-8}, 1\%$ of the median nonzero reference norm at that layer$)$, computed once from
+the reference batch) plus explicit exclusion of any cell whose raw reference norm falls below $10^{-4}$
+from the reported mean. Applied in \texttt{representations\_small.py}'s \texttt{layer\_time\_distance()}
+and rerun via the new \texttt{plot\_experiment3\_layertime\_fixed.py}.
+
+\paragraph{Fix 2 ($E_{90}$ multi-draw averaging).} The direct equivariance-error computation ($E_{90}$,
+used for Experiment 2's ``does spike placement matter'' ordering claim) resets the encoding RNG to the
+same seed value for both the upright image $x$ and its rotation $R_\theta x$ before drawing the
+Poisson/Bernoulli spike encoding. Because rotation moves image content between tensor positions, sharing
+a seed value reproduces the same raw random stream but does not reproduce a matched spike encoding
+under rotation --- it only gives run-to-run reproducibility, not the variance cancellation the
+convention seems to have intended. A single draw's $E_{90}$ is therefore dominated by Monte-Carlo
+spike-sampling variance, not a stable property of the trained model (confirmed empirically: re-drawing
+the encoding seed alone, with no rotation or config change, reproduces the reported group-angle
+magnitudes and ordering). Fix: draw the encoding 8 independent times per (model seed, config), each with
+a genuinely different encoding seed ($\text{seed}\times1000 + \text{draw\_index}$, never reused), and
+report the mean and std across draws instead of a single value. Added as
+\texttt{equivariance\_error\_multidraw()} in \texttt{representations\_small.py} and run via the new
+\texttt{plot\_experiment2\_summary\_multidraw.py}.
+
+\textit{Both fixes touch analysis/metric code only (\texttt{representations\_small.py} plus two new
+driver scripts); \texttt{gconv\_small.py}, \texttt{p4cnn\_small.py}, \texttt{spiking\_p4cnn\_small.py},
+and every training script are untouched, and no model was retrained.}
+
+\FloatBarrier
+
+% ===========================================================================
+\section{Baseline Accuracy (All Configs, All Regimes)}
+\label{sec:part2}
+
+Across every regime in this project, the qualitative story is the same: once training is done properly
+(\texttt{P4BatchNorm2d}, adequate epochs), rotation-accuracy curves for every spike-placement
+configuration sit within a few percentage points of each other, with substantial seed-to-seed error-bar
+overlap at the hardest angles. Accuracy alone does not distinguish spike placement in any regime tested.
+
+\subsection{Full Capacity (Report 1): $T{=}50$, 20 Epochs, 24{,}744 Params}
+
+\textit{Report 1 does not publish a per-configuration numeric accuracy table --- only the comparison
+figure below plus qualitative text are available in that report. Its text states the four
+configurations' curves sit within a few points of each other at every angle, with substantial
+error-bar overlap at the hardest angles ($45^\circ,135^\circ,225^\circ,315^\circ$), confirming that two
+dramatic accuracy-level findings from an earlier, compute-constrained ($T{=}30$, 5-epoch, single-seed,
+CPU-only) draft of the same project did not replicate under this corrected setup (\FullSpiking's earlier
+flat 51--57\% and \HybridLate's earlier collapse to chance at non-group angles). Under the corrected
+setup, \FullSpiking\ reaches $\sim 99\%$ upright and $\sim 94\%$ mean accuracy across all angles;
+\HybridLate's worst case across all seeds and angles is 80.9\%.}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots/n4_comparison_final.png}
+\caption{Full capacity: 4-class rotation-angle sweep, mean $\pm$ std over 3 seeds,
+\Analog\ / \Alternating\ / \FullSpiking\ / \HybridLate\ (\HybridEarly/\HybridMid: not trained, see
+Section~1.3). \texttt{plots/n4\_comparison\_final.png}}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Reduced Capacity, Regime A: $T{=}50$, 10 Epochs, 2{,}420 Params}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Configuration} & Best $0^\circ$ acc.\ (\%), mean$\pm$std, 3 seeds & Mean acc.\ over 24 angles (\%) \\
+\midrule
+\None            & $97.67 \pm 0.48$ & $84.77$ \\
+\Alternating     & $97.39 \pm 0.73$ & $85.62$ \\
+\FullSpiking     & $96.39 \pm 0.36$ & $86.30$ \\
+\HybridEarly     & $95.14 \pm 3.53$ & $81.32$ \\
+\HybridLate      & $97.60 \pm 0.24$ & $85.84$ \\
+\bottomrule
+\end{tabular}
+\caption{Regime A baseline accuracy.}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/small_n5_comparison.png}
+\caption{Regime A ($T{=}50$, 10 epochs), all 5 configurations, mean $\pm$ std over 3 seeds.
+\texttt{plots\_small/small\_n5\_comparison.png}}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Reduced Capacity, Regime B: $T{=}30$, 5 Epochs, 2{,}420 Params}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Configuration} & Best $0^\circ$ acc.\ (\%), mean$\pm$std, 3 seeds & Mean acc.\ over 24 angles (\%) \\
+\midrule
+\None            & $97.25 \pm 0.34$ & $84.52$ \\
+\Alternating     & $96.71 \pm 0.12$ & $86.87$ \\
+\FullSpiking     & $95.14 \pm 0.53$ & $84.31$ \\
+\HybridEarly     & $91.39 \pm 5.71$ & $77.86$ \\
+\HybridLate      & $97.09 \pm 0.08$ & $82.03$ \\
+\bottomrule
+\end{tabular}
+\caption{Regime B baseline accuracy.}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small_t30/small_n5_comparison.png}
+\caption{Regime B ($T{=}30$, 5 epochs), all 5 configurations, mean $\pm$ std over 3 seeds.
+\texttt{plots\_small\_t30/small\_n5\_comparison.png}}
+\end{figure}
+
+\FloatBarrier
+
+One configuration breaks the ``accuracy is uninformative'' pattern in both reduced-capacity regimes:
+\HybridEarly\ shows a conspicuously large seed-to-seed standard deviation ($\pm 3.53$ at Regime A,
+$\pm 5.71$ at Regime B), driven by a single unstable seed (seed 2: 90.20\% and 83.33\%
+best-upright-accuracy respectively, versus $\geq 95\%$ for seeds 0 and 1 in both regimes). This
+instability has no full-capacity analogue since Report 1 never trained \HybridEarly; it is plausibly a
+capacity effect (at only 4 channels, \HybridEarly's spiking layers 1--2 sit immediately after the
+lifting convolution, where the network has the least redundancy to absorb a bad initialization's
+interaction with the surrogate-gradient spiking nonlinearity) and was not investigated further
+(Section~\ref{sec:part11}).
+
+\FloatBarrier
+
+% ===========================================================================
+\section{Layer-wise Representation Similarity (Experiment 5.1)}
+\label{sec:part3}
+
+This finding was consistent everywhere it was tested --- full capacity, both reduced-capacity regimes,
+every spike-placement configuration including the zero-spiking control --- and is stated here plainly,
+without hedging, because the evidence does not call for any.
+
+\begin{keypoint}
+Representational similarity to the upright image (measured by cosine similarity, CKA, and SVCCA between
+$h_\ell(x)$ and $h_\ell(R_\theta x)$) stays high through the early and middle layers and collapses only
+at the final layer(s), in every configuration tested at every capacity, including \Analog/\None, which
+has zero spiking neurons anywhere in the network. Whatever causes deep-layer representations to become
+rotation-sensitive is a property of the $p4$-equivariant architecture itself (most plausibly the
+group-pooling and final linear-classifier stages, the only components not built from strictly
+equivariant convolutions) --- not something introduced by spiking dynamics.
+\end{keypoint}
+
+\subsection{Full Capacity (Report 1)}
+
+CKA similarity to the upright representation stays at or above roughly 0.97--0.99 through layers 1--5
+in every configuration, then drops sharply in layers 6--7 to roughly 0.70--0.85 at the hardest angles
+(typically $15^\circ,30^\circ,45^\circ,60^\circ$ etc., the non-group angles nearest a group angle).
+Spike placement modulates the shape somewhat --- \Alternating\ and \FullSpiking\ show a slightly earlier
+onset of divergence (visible already around layer 5) relative to \Analog\ and \HybridLate\ --- but not
+the existence or final location of the collapse: all four configurations land in the same 0.70--0.85
+CKA range by layer 7 at the hardest angles. Cosine similarity is much lower and noisier throughout
+(typically 0.3--0.6 even at shallow layers) since it demands exact neuron-by-neuron agreement with no
+tolerance for internal reshuffling of which channel encodes which feature; CKA and SVCCA both stay near
+1.0 through layer 5 and diverge only at layers 6--7.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/analog_layerwise_cka.png}
+\caption{Full capacity, \Analog\ --- CKA similarity to upright vs.\ layer, one line per test angle.
+\texttt{plots/analog\_layerwise\_cka.png}}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/alternating_layerwise_cka.png}
+\caption{Full capacity, \Alternating\ --- same quantity. \texttt{plots/alternating\_layerwise\_cka.png}}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/full_layerwise_cka.png}
+\caption{Full capacity, \FullSpiking\ --- same quantity. \texttt{plots/full\_layerwise\_cka.png}}
+\end{figure}
+
+\FloatBarrier
+\textit{\HybridLate's standalone aggregate CKA plot (\texttt{hybrid\_late\_layerwise\_cka.png}) was not
+generated in Report 1's pass --- explicitly noted there, not silently omitted here. Its per-seed 5.1
+figures were used instead in that report and show the same collapse pattern.}
+
+\subsection{Reduced Capacity, Both Regimes (Reports 2--3)}
+
+With only 5 layers instead of 7 there is less ``room'' for a late-layer-only collapse to look visually
+distinct from a whole-network effect, yet the qualitative pattern reproduces cleanly: similarity to the
+upright representation stays high through the early-to-middle layers and drops at the final layer(s),
+in every configuration and both training regimes, including \None. This is the single most important
+replication in Report 2: the architectural (not spiking) origin of the collapse holds at $10.2\times$
+less capacity, 40\% less simulation time (Regime B), and a quarter of the training epochs (Regime B).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small/repr_seed0/similarity_comparison_cka.png}
+\caption{Regime A, seed 0 --- CKA similarity to upright vs.\ layer, all 5 configurations overlaid.
+\texttt{plots\_small/repr\_seed0/similarity\_comparison\_cka.png}}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/similarity_comparison_cka.png}
+\caption{Regime B, seed 0 --- same comparison.
+\texttt{plots\_small\_t30/repr\_seed0/similarity\_comparison\_cka.png}}
+\end{figure}
+
+\FloatBarrier
+\textit{Spike placement's secondary modulation of exactly where the divergence first becomes visible
+(\Alternating/\FullSpiking\ diverging one layer earlier than \None/\HybridLate, per the full-capacity
+finding) is harder to isolate cleanly with only 5 layers to distribute the effect across --- this is a
+genuine capacity-driven limitation on how finely the secondary claim can be tested at this depth, not a
+contradiction of it.}
+
+% ===========================================================================
+\section{Rotation Sensitivity, by Layer and by Time (Experiments 5.3, 5.4)}
+\label{sec:part4}
+
+\subsection{5.3: Distribution of $\mathcal{R}_i$ Across Layers}
+
+$\mathcal{R}_i = \mathrm{Var}_\theta(a_i(R_\theta x))$, the rotation sensitivity of neuron $i$ over the
+24 test angles. In every configuration and every capacity, the final layer sits at or near the top of
+the $\mathcal{R}_i$ ranking, consistent with Section~\ref{sec:part3}'s identification of the last
+layer(s) as where invariance breaks down. The shape of the climb to the final layer differs
+meaningfully by spike placement, at full capacity:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{10.5cm}@{}}
+\toprule
+\textbf{Configuration} & \textbf{Shape of $\mathcal{R}_i$ climb to final layer (full capacity)} \\
+\midrule
+\Alternating & sharp, order-of-magnitude jump only at the final layer: median $\mathcal{R}_i \sim 10$--100
+for the earlier layers, jumping to $\sim 400$--800 at layer 7 \\[3pt]
+\FullSpiking & gradual, full-depth climb: median $\mathcal{R}_i$ rises roughly monotonically from
+$\sim 10$ (layer 1) to $\sim 90$--100 (layer 7), no single sharp jump \\[3pt]
+\HybridLate & nearly flat across all layers: median $\mathcal{R}_i$ in a comparatively narrow band
+($\sim 10$--80) at every depth, including the final layer \\[3pt]
+\Analog & gradual full-depth climb similar in shape to \FullSpiking, but $\sim 1000\times$ smaller in
+absolute scale ($\sim 0.01$--0.05 throughout) \\
+\bottomrule
+\end{tabular}
+\caption{Per-configuration $\mathcal{R}_i$ shape, full capacity.}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/full_rotation_sensitivity.png}
+\caption{Full capacity, \FullSpiking\ --- $\mathcal{R}_i$ distribution by layer (log scale).
+\texttt{plots/full\_rotation\_sensitivity.png}}
+\end{figure}
+
+\FloatBarrier
+\textit{\HybridLate's standalone aggregate boxplot (\texttt{hybrid\_late\_rotation\_sensitivity.png})
+was likewise not generated in Report 1's pass; its per-seed 5.3 figures were used instead there.}
+
+\textit{Reduced capacity: the same qualitative fingerprint (sharp late jump for \Alternating, gradual
+climb for \FullSpiking/\None, flatter profile for \HybridLate) reproduces, but is harder to resolve
+cleanly with only 5 layers to distribute the pattern across. This is consistent with, not contradicted
+by, the full-capacity finding --- the reduced-capacity report is underpowered to cleanly distinguish the
+shapes at this depth, not evidence the shapes actually converge.}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small/repr_seed0/rotsens_median_comparison.png}
+\caption{Regime A, seed 0 --- median $\mathcal{R}_i$ per layer, all 5 configurations overlaid (log scale).
+\texttt{plots\_small/repr\_seed0/rotsens\_median\_comparison.png}}
+\end{figure}
+
+\FloatBarrier
+\begin{keypoint}
+$\mathcal{R}_i$'s absolute scale depends on whether the underlying activation is a continuous ReLU
+output or a spike count, so the fair cross-configuration comparison is the \emph{shape} of the
+$\mathcal{R}_i$-vs-layer curve, not the raw magnitude. Within a single configuration, comparisons across
+layers or seeds are on safe footing.
+\end{keypoint}
+
+\subsection{5.4: Rotation Sensitivity Through Time}
+
+$\mathcal{R}_i(t)$: the same quantity computed from the instantaneous per-timestep spike output alone,
+plotted against timestep $t$. In every configuration, every seed, and every capacity/regime tested,
+$\mathcal{R}_i(t)$ rises quickly over the first few timesteps and then plateaus for the remainder of the
+simulation, with no visible downward trend. This directly contradicts the temporal-contraction
+hypothesis that motivated this experiment (that temporal averaging should progressively reduce
+sensitivity, $\mathcal{R}_i(t)$ decaying toward 0 as spikes accumulate) --- sensitivity is set almost
+immediately and then stays fixed.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/full_seed0/full_seed0_5.4_rotation_sensitivity_through_time.png}
+\caption{Full capacity, \FullSpiking, seed 0 --- $\mathcal{R}_i(t)$ vs.\ timestep, all 7 layers.
+\texttt{plots/full\_seed0/full\_seed0\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small/repr_seed0/rotsens_temporal_full.png}
+\caption{Regime A, \FullSpiking, seed 0 --- median $\mathcal{R}_i(t)$ vs.\ timestep, all 5 layers.
+\texttt{plots\_small/repr\_seed0/rotsens\_temporal\_full.png}}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/rotsens_temporal_full.png}
+\caption{Regime B, \FullSpiking, seed 0 --- same quantity, $T{=}30$.
+\texttt{plots\_small\_t30/repr\_seed0/rotsens\_temporal\_full.png}}
+\end{figure}
+
+\FloatBarrier
+\textit{Layer 7 (full capacity) plateaus visibly higher than other layers in \Alternating\ and
+\FullSpiking, consistent with Section~\ref{sec:part3}; in \HybridLate\ the plateau levels across layers
+are closer together, consistent with that configuration's flatter layer-wise sensitivity profile.
+\Analog\ has no meaningful 5.4 plot at full capacity ($T{=}1$, no timestep axis). The plateau-not-decay
+result reproduces exactly at reduced capacity, in both regimes, with no exceptions found in any
+configuration or seed examined.}
+
+\FloatBarrier
+
+% ===========================================================================
+\section{Direct Equivariance Error (Experiment 5.8 / Experiment 2's $E_{90}$)}
+\label{sec:part5}
+
+This is the section of the project where the most care is required, because two genuinely different
+quantities were measured under the same name (``equivariance error'') across reports, and one of them
+(the reduced-capacity $E_{90}$ value) needed a genuine correction. It is deliberately structured in four
+steps so none of that gets blurred together.
+
+\subsection{Two Different Quantities, Not Directly Comparable}
+
+Both quantities are legitimate, correctly-implemented computations of the relative error
+$\|f(R_\theta x) - f(x)\| / \|f(x)\|$, which the $p4$ architecture guarantees is exactly 0 at the four
+group angles $\{0^\circ,90^\circ,180^\circ,270^\circ\}$ by construction. They differ in two ways that
+turn out to matter a great deal:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{4.6cm}p{4.6cm}@{}}
+\toprule
+ & \textbf{Report 1 (full capacity)} & \textbf{Reports 2--3 (reduced capacity, $E_{90}$)} \\
+\midrule
+Space & raw accumulated-spike-count logits (no softmax) & softmax class-probability vector \\
+Angle reduction & peak (max) over all 24 test angles & value at exactly $\theta{=}90^\circ$ \\
+\bottomrule
+\end{tabular}
+\caption{The two ``equivariance error'' formulas compared across reports.}
+\end{table}
+
+\textit{The audit confirmed directly (not just by formula inspection) that this difference, not model
+capacity, drives the apparently contradictory orderings below: recomputing BOTH formulas on the SAME
+reduced-capacity checkpoints reproduces Report~1's ordering under the raw-logit/peak-over-angles formula
+(\None\ highest at 0.417, \FullSpiking\ lowest at 0.270) and reproduces the opposite ordering under the
+softmax/value-at-$90^\circ$ formula (\FullSpiking\ highest at 0.498) --- on identical models. Softmax
+compresses outputs onto a bounded probability simplex, which changes both which angle maximizes the
+disagreement and how the denominator scales with each configuration's confidence/calibration, which
+differs systematically by configuration. Sections~\ref{sec:5.2}--\ref{sec:5.3} below report each
+quantity as its own report found it; they are not reconciled into one ordering (Section~\ref{sec:5.4}).}
+
+\subsection{Full-Capacity Finding: Peak Equivariance Error (Report 1, As-Is)}
+\label{sec:5.2}
+
+Quantity: raw-logit relative error, peak over all 24 angles. Every configuration's error touches (or
+comes extremely close to) 0 at exactly the four group angles and rises to a local maximum roughly
+halfway between them, in every configuration and every seed --- the expected sawtooth, and a strong
+sanity check that \texttt{P4BatchNorm2d}'s equivariance fix functions correctly in fully trained models.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/analog_seed0/analog_seed0_5.8_equivariance_error.png}
+\caption{Full capacity, \Analog, seed 0 --- equivariance error vs.\ angle.
+\texttt{plots/analog\_seed0/analog\_seed0\_5.8\_equivariance\_error.png}}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/full_seed0/full_seed0_5.8_equivariance_error.png}
+\caption{Full capacity, \FullSpiking, seed 0 --- same quantity.
+\texttt{plots/full\_seed0/full\_seed0\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\FloatBarrier
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Configuration} & \textbf{Spiking layers} & \textbf{Approx.\ peak equiv.\ error (mean over seeds)} \\
+\midrule
+\Analog & 0/7 & $\sim 0.58$--0.59 (highest) \\
+\Alternating & 3/7 & $\sim 0.50$--0.60 \\
+\HybridLate & 1/7 & $\sim 0.35$--0.40 \\
+\FullSpiking & 7/7 & $\sim 0.33$--0.42 (lowest) \\
+\bottomrule
+\end{tabular}
+\caption{Peak equivariance error, full capacity.}
+\end{table}
+
+If spiking dynamics simply degraded invariance in proportion to how many layers spike, peak error should
+increase monotonically from \Analog\ through \HybridLate\ through \Alternating\ through \FullSpiking.
+The data does not show this: \Analog\ has the highest peak error and \FullSpiking\ the lowest --- the
+opposite of the naive ``spiking hurts invariance'' expectation. Report 1 reports this as an open,
+reproducible observation, not an explained result; no experiment run in that report isolates why this
+ordering holds.
+
+\subsection{Reduced-Capacity $E_{90}$ Finding, CORRECTED (Supersedes Reports 2 and 3)}
+\label{sec:5.3}
+
+\textit{Quantity: softmax-probability relative error, value at exactly $\theta{=}90^\circ$ (``$E_{90}$'').}
+
+This supersedes two earlier readings of the same quantity. Report 2's single-seed-0 reading first
+suggested \FullSpiking\ was uniquely, severely anomalous at the group angles; Report 2's seed-1 revision
+(\texttt{findings\_report\_t30.tex}) walked that back to ``noisy across every configuration, no
+configuration reproducibly anomalous, $n{=}2$ is not enough to tell.'' Report 3, using a probe set held
+fixed across seeds (a genuine methodological improvement over Report 2's per-seed-varying probe set),
+found a clean monotonic ordering ($\None < \Alternating < \FullSpiking$) in both regimes and described
+it as materially cleaner than Report 2's reading. The correction described in Section~\ref{sec:corrections}
+(Fix 2: 8 independent encoding draws per model seed, each with a genuinely different encoding seed) was
+applied on top of Report 3's fixed-probe-set protocol, because the audit traced the underlying noise
+source to Monte-Carlo spike-sampling variance in the encoding, not to the probe set.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Regime} & \None & \Alternating & \FullSpiking \\
+\midrule
+A ($T{=}50$) & $0.0038 \pm 0.0044$ & $0.0102 \pm 0.0038$ & $0.0249 \pm 0.0151$ \\
+B ($T{=}30$) & $0.0146 \pm 0.0087$ & $0.0248 \pm 0.0147$ & $0.0455 \pm 0.0168$ \\
+\bottomrule
+\end{tabular}
+\caption{$E_{90}$, mean $\pm$ std over 3 model seeds; each seed's own value is itself the mean of 8
+independent encoding draws, so this combines model-seed variance and encoding-draw variance.}
+\label{tab:e90corrected}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment2/exp2_e90_multidraw_comparison.png}
+\caption{$E_{90}$ before (single-draw) vs.\ after (8-draw mean) the Fix 2 correction, both regimes, mean
+$\pm$ std over 3 model seeds. \texttt{plots\_small/experiment2/exp2\_e90\_multidraw\_comparison.png}}
+\end{figure}
+
+\FloatBarrier
+\textbf{What survives:} the mean ordering $\None < \Alternating < \FullSpiking$ holds in both regimes,
+independently --- and it is now corroborated two ways rather than one, since it reproduces at $T{=}50$
+and $T{=}30$ on entirely different checkpoints and is stable to which encoding draw is used, not just to
+which model seed happened to be picked. That is a real strengthening of the claim relative to any
+single-draw reading.
+
+\textbf{What does not survive:} the word ``clean.'' The mean $\pm$ std bands overlap substantially
+between adjacent configurations at $n{=}3$ model seeds in both regimes (e.g.\ Regime A: \None's upper
+band 0.0083 already overlaps \Alternating's lower band 0.0064; \Alternating/\FullSpiking\ overlap even
+more heavily). This is not new noise introduced by the correction --- the old single-draw per-seed
+numbers already had the same overlap (e.g.\ Regime A seed 1: $\Alternating{=}0.0213 > \FullSpiking{=}0.0177$)
+--- multi-draw averaging simply makes the overlap explicit and quantified rather than hidden behind a
+single point estimate per seed. \emph{Directional and cross-regime-consistent} is a defensible claim at
+$n{=}3$ seeds; \emph{clean statistical separation} between adjacent configurations is not, and would
+require more model seeds, not more encoding draws.
+
+\subsection{These Two Findings Are Not Reconciled}
+\label{sec:5.4}
+
+\begin{keypoint}
+Section~\ref{sec:5.2} (full-capacity, peak-over-angles, raw logits) and Section~\ref{sec:5.3}
+(reduced-capacity, value-at-$90^\circ$, softmax, multi-draw-corrected) are different measurements on
+different models. No attempt is made here to merge them into one ordering or one causal story, because
+Section~\ref{sec:part5}.1 already demonstrated that switching the formula alone flips the ordering on
+identical checkpoints --- any apparent agreement or disagreement between Sections~\ref{sec:5.2}
+and~\ref{sec:5.3} as currently computed would not be informative. This is flagged as an explicit open
+question for future work: computing BOTH quantities (raw-logit peak-over-angles, and softmax multi-draw
+value-at-$90^\circ$) on the SAME set of checkpoints, ideally the full-capacity model, would be needed
+before any claim relating them could be made.
+\end{keypoint}
+
+\FloatBarrier
+
+% ===========================================================================
+\section{Layer/Time Representation Distance $D_{\ell,t}$ (Experiment 3)}
+\label{sec:part6}
+
+$D_{\ell,t}(\theta) = \mathbb{E}_x\!\left[\dfrac{\|h_{\ell,t}(R_\theta x) - h_{\ell,t}(x)\|}
+{\|h_{\ell,t}(x)\| + \epsilon}\right]$, the representation distance at a single layer and single
+timestep, evaluated at $\theta{=}45^\circ$ (no exact group guarantee) and $\theta{=}90^\circ$ (exact
+$C_4$ guarantee). This section reports the CORRECTED numbers (the correction described in
+Section~\ref{sec:corrections}, Fix 1) and states plainly that the original raw values ($\sim 10^5$ to
+$\sim 3.4\times10^7$) were floor-division artifacts carrying no signal about representation distance,
+not a real result to be interpreted.
+
+\subsection{Layer 5, Mean $D_{\ell,t}(45^\circ)$: Before vs.\ After}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment3_fixed/exp3_layer5_before_after_all_combos.png}
+\caption{Layer 5 mean $D_{45^\circ}$, all 3 configs $\times$ 3 seeds $\times$ 2 regimes, before (fixed
+$\epsilon{=}10^{-8}$, log scale) vs.\ after (layer-relative $\epsilon$ + floor masking) the Fix 1
+correction. \texttt{plots\_small/experiment3\_fixed/exp3\_layer5\_before\_after\_all\_combos.png}}
+\end{figure}
+
+\FloatBarrier
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+\textbf{Regime} & \textbf{Config} & \textbf{Seed} & \textbf{Mean BEFORE} & \textbf{Mean AFTER} & \textbf{Cells excl.} \\
+\midrule
+T50 & \None & 0 & $5.2\times10^5$ & $1.03$ & 1.0\% \\
+T50 & \None & 1 & $1.3\times10^6$ & $1.13$ & 6.6\% \\
+T50 & \Alternating & 0 & $2.1\times10^6$ & $1.16$ & 7.6\% \\
+T50 & \FullSpiking & 0 & $8.9\times10^6$ & $1.18$ & 9.5\% \\
+T30 & \FullSpiking & 0 & $9.6\times10^6$ & $1.12$ & 12.8\% \\
+\bottomrule
+\end{tabular}
+\caption{Representative rows; full 18-combination table is in \texttt{exp3\_eps\_diagnostics.csv} under
+each regime's \texttt{experiment3\_fixed/} folder.}
+\end{table}
+
+\textit{Every blown-up value collapses to the 0.85--1.4 range once the floor artifact is removed; seeds
+that were already sane (e.g.\ \None\ seed 2: 0.87 before and after) barely move --- confirming the fix
+targets exactly the broken cells and does not disturb the ones that were already correct.}
+
+\subsection{Visual Before/After: Heatmaps}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment3/exp3_heatmap_full_seed0.png}
+\caption{BEFORE (original, \texttt{plots\_small/experiment3/}): \FullSpiking, Regime A, seed 0 ---
+$D_{\ell,t}(45^\circ)$ heatmap. The deepest layer's color range is dominated by floor-division spikes.}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment3_fixed/exp3_heatmap_full_seed0.png}
+\caption{AFTER (corrected, \texttt{plots\_small/experiment3\_fixed/}): same model/seed/quantity, with
+the Fix 1 layer-relative epsilon and floor masking applied.}
+\end{figure}
+
+\FloatBarrier
+\subsection{Collapse-Frequency-by-Configuration Finding, Corrected Caveat}
+
+Report 3 originally described the layer-5 floor-collapse frequency as ``rare in \None, frequent in
+\Alternating, near-constant in \FullSpiking,'' read from single-seed data. With the corrected metric
+computed across all 3 seeds and both regimes, the directional claim survives on average but the
+``near-constant'' language does not --- it overstates what a single seed showed.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & \None & \Alternating & \FullSpiking \\
+\midrule
+T50, mean \% cells excluded ($\theta{=}45^\circ$) & $2.5\% \pm 3.6$ & $3.1\% \pm 4.0$ & $3.8\% \pm 5.0$ \\
+T30, mean \% cells excluded ($\theta{=}45^\circ$) & $2.1\% \pm 3.1$ & $0.7\% \pm 1.1$ & $4.7\% \pm 7.0$ \\
+\bottomrule
+\end{tabular}
+\caption{Layer-5 floor-collapse frequency, mean $\pm$ std over 3 seeds.}
+\end{table}
+
+\textit{On average, across seeds, \FullSpiking\ does have the highest floor-collapse rate in both
+regimes, consistent with more spiking layers upstream propagating more sparsity into the narrow final
+layer. But this is not a clean per-seed pattern: \FullSpiking\ seed 0 hits 9.5--12.8\% exclusion while
+\FullSpiking\ seed 1 hits only 0.5--0.6\%, comparable to \None. The correct framing is ``higher on
+average, consistent with the number of spiking layers, but with seed-to-seed variance as large as the
+effect itself'' --- not ``near-constant.'' This is the same seed-variance caution that recurs elsewhere
+in this project (Sections~\ref{sec:part9}--\ref{sec:part10}).}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.65\textwidth]{plots_small/experiment3_fixed/exp3_lines_full_seed0.png}
+\caption{Regime A, \FullSpiking, seed 0 (corrected) --- $D_{\ell,t}(45^\circ)$ solid vs.\
+$D_{\ell,t}(90^\circ)$ dashed (layer 5 only), log scale.}
+\end{figure}
+
+\FloatBarrier
+The upstream-sparsity-propagation hypothesis first proposed in Report 3 --- that sparsity introduced by
+an upstream spiking layer propagates forward and makes a downstream analog layer's pre-activation more
+likely to be exactly zero at a given timestep, rather than the layer's own activation type being what
+matters --- remains a plausible, mechanistically motivated reading of the corrected data, but is still
+not directly verified (Section~\ref{sec:part11}).
+
+% ===========================================================================
+\section{Fourier Analysis of the Rotational Response (Experiment 4)}
+\label{sec:part7}
+
+This experiment needs no correction and is the strongest, most seed-stable result in the project. It is
+presented here as reported in Report 3, unchanged, as the headline confirmatory result of the whole
+programme.
+
+Setup: for \None, \Alternating, \FullSpiking, all 3 seeds, both regimes, the classification margin
+$M(\theta) = z_y(R_\theta x) - \max_{c\neq y} z_c(R_\theta x)$ and accuracy $A(\theta)$ are evaluated at
+$1^\circ$ resolution (360 angles) on a fixed 32-image probe set, using raw accumulated-spike-count
+logits (not softmax). $M(\theta)$ is Fourier-decomposed up to $k_{\max}{=}20$, giving $E_{\text{noninv}}$
+(non-constant energy fraction) and $E_{\text{forbidden}}$ (energy at $k$ not divisible by 4 ---
+architecturally, this should be $\approx 0$ for an exact $p4$ network).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment4/exp4_rotation_response_full.png}
+\caption{Regime A, \FullSpiking\ --- classification margin $M(\theta)$, all 3 seeds + mean, $1^\circ$
+resolution.}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment4/exp4_fourier_spectrum_full.png}
+\caption{Regime A, \FullSpiking\ --- Fourier spectrum magnitude vs.\ $k$; red = allowed ($k$ a multiple
+of 4), gray = forbidden.}
+\end{figure}
+
+\FloatBarrier
+The spectrum is unambiguous: every forbidden frequency sits at a uniform noise floor
+($\sqrt{a_k^2+b_k^2} \lesssim 0.03$) indistinguishable from zero, while the allowed frequencies show a
+clear, decaying spectrum dominated by $k{=}4$ ($\sim 2$--3), with smaller but clearly nonzero
+contributions at $k{=}8,12,16,20$. This is the clearest confirmation in the entire project of the $p4$
+architecture's exact discrete-symmetry guarantee, directly in Fourier space rather than through an
+accuracy or representation-similarity proxy.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+\textbf{Regime} & \textbf{Config} & $a_0$ & $E_{\text{noninv}}$ & $E_{\text{forbidden}}$ & $|coef_{k=4}|$ & $|coef_{k=8}|$ \\
+\midrule
+A & \None & $7.11\pm2.62$ & $0.278\pm0.094$ & $9.2\times10^{-5}\pm3.9\times10^{-5}$ & $4.07\pm0.74$ & $0.63\pm0.28$ \\
+A & \Alternating & $7.80\pm1.88$ & $0.228\pm0.058$ & $1.11\times10^{-4}\pm5.5\times10^{-5}$ & $4.08\pm0.34$ & $0.36\pm0.34$ \\
+A & \FullSpiking & $5.94\pm1.61$ & $0.192\pm0.086$ & $1.18\times10^{-4}\pm3.8\times10^{-5}$ & $2.70\pm0.51$ & $0.48\pm0.11$ \\
+B & \None & $5.73\pm0.96$ & $0.252\pm0.095$ & $1.56\times10^{-4}\pm2.6\times10^{-5}$ & $3.31\pm1.16$ & $0.37\pm0.15$ \\
+B & \Alternating & $6.27\pm0.99$ & $0.174\pm0.064$ & $1.33\times10^{-4}\pm4.9\times10^{-5}$ & $2.77\pm0.23$ & $0.22\pm0.14$ \\
+B & \FullSpiking & $4.07\pm0.66$ & $0.201\pm0.050$ & $2.84\times10^{-4}\pm6.7\times10^{-5}$ & $2.01\pm0.44$ & $0.22\pm0.18$ \\
+\bottomrule
+\end{tabular}
+\caption{Experiment 4 summary, mean $\pm$ std over 3 seeds.}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment4/exp4_enoninv_eforbidden.png}
+\caption{Regime A --- $E_{\text{noninv}}$ (left) vs.\ $E_{\text{forbidden}}$ (right), boxplot + individual
+seeds, all 3 configurations.}
+\end{figure}
+
+\FloatBarrier
+\begin{keypoint}
+$E_{\text{forbidden}}$ is architectural, not learned: all three configurations cluster tightly in the
+same narrow band ($\sim 6\times10^{-5}$ to $\sim 2.8\times10^{-4}$) across both regimes, with heavily
+overlapping seed distributions --- exactly the ``essentially independent of the random seed''
+prediction this experiment was designed to test. $E_{\text{noninv}}$ is NOT architectural: it varies
+more across configurations and seeds (0.17--0.28), with a mild trend toward lower non-invariant energy
+as more layers spike, visible for the $k{=}4$ coefficient specifically ($\None > \Alternating >
+\FullSpiking$ in both regimes) though not fully consistent for $E_{\text{noninv}}$ itself. This is
+exactly the architecture-determines-symmetry / training-determines-learned-invariance-strength
+distinction the experimental programme set out to isolate.
+\end{keypoint}
+
+% ===========================================================================
+\section{Compute-Budget Findings: Truncated-$T'$ Accuracy (Experiment 5.7)}
+\label{sec:part8}
+
+A single model, trained once at its regime's full $T$, has its recorded spike train truncated to the
+first $T'$ timesteps at evaluation time and a classification decision decoded from only those, without
+retraining. This tests whether rotation-robust accuracy structure emerges progressively as spikes
+accumulate, and how quickly.
+
+\subsection{Full Capacity (Report 1)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/full_seed0/full_seed0_5.7_temporal_evolution.png}
+\caption{Full capacity, \FullSpiking, seed 0 --- accuracy vs.\ angle at $T'{=}1,5,10,20,50$.}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots/hybrid_late_seed0/hybrid_late_seed0_5.7_temporal_evolution.png}
+\caption{Full capacity, \HybridLate, seed 0 --- same $T'$ grid.}
+\end{figure}
+
+\FloatBarrier
+\FullSpiking's $T'{=}1$ curve is flat at $\sim 25$--27\% (chance) across every angle --- with all 7
+layers spiking, every layer needs several timesteps to integrate enough input spikes to pass a
+meaningful signal onward, and this startup delay compounds across all 7 layers. Real W-shaped structure
+appears only by $T'{=}10$ and is nearly indistinguishable from $T'{=}50$ by $T'{=}20$. \Alternating's
+$T'{=}1$ curve already shows a weak but genuine W-shape (25--70\%, seed/angle-dependent). \HybridLate's
+$T'{=}1$ curve already closely tracks the full $T'{=}50$ curve's shape (63--99\%) --- with only the final
+layer spiking, six of seven layers process instantaneously regardless of $T'$. This gives a consistent,
+monotonic ordering across all 9 seed-runs examined (3 configs $\times$ 3 seeds): the more layers that
+spike, the more timesteps needed before rotation-robust accuracy structure appears.
+
+\subsection{Reduced Capacity, Both Regimes (Report 2)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+\textbf{Regime} & \textbf{Config} & $T'{=}1$ & $T'{=}5$ & $T'{=}10$ & $T'{=}20$ & $T'{=}50$ \\
+\midrule
+A & \Alternating & 51.2\% & 84.4\% & 86.6\% & 87.0\% & 89.4\% \\
+A & \FullSpiking & 31.2\% & 71.0\% & 82.6\% & 84.7\% & 85.9\% \\
+A & \HybridLate & 58.7\% & 87.0\% & 88.7\% & 89.1\% & 89.6\% \\
+A & \None & 77.1\% & 85.9\% & 88.4\% & 88.7\% & 90.5\% \\
+\midrule
+B & \Alternating & $45.5\pm6.6\%$ & $79.6\pm12.6\%$ & $83.9\pm9.7\%$ & $85.1\pm9.0\%$ & $84.9\pm9.0\%$ \\
+B & \FullSpiking & $34.3\pm6.9\%$ & $66.1\pm17.4\%$ & $78.6\pm8.9\%$ & $82.0\pm4.8\%$ & $83.3\pm4.3\%$ \\
+B & \HybridLate & $60.3\pm9.1\%$ & $76.0\pm7.3\%$ & $79.1\pm6.0\%$ & $80.3\pm6.7\%$ & $81.5\pm6.3\%$ \\
+B & \None & $73.1\pm6.1\%$ & $80.9\pm4.0\%$ & $83.2\pm3.7\%$ & $84.5\pm3.1\%$ & $84.8\pm3.0\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Truncated-$T'$ accuracy, reduced capacity. Regime A ($T{=}50$): single seed (seed 0). Regime B
+($T{=}30$): mean $\pm$ std over seeds $\{0,1\}$.}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small/repr_seed0/truncated_T_by_angle_full.png}
+\caption{Regime A, \FullSpiking, seed 0 --- accuracy vs.\ angle at $T'{=}1,5,10,20,50$.}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small/repr_seed0/truncated_T_by_angle_hybrid_late.png}
+\caption{Regime A, \HybridLate, seed 0 --- same $T'$ grid.}
+\end{figure}
+
+\FloatBarrier
+The same ``more spiking layers $\Rightarrow$ longer warm-up'' ordering reproduces at reduced capacity,
+in both regimes.
+
+\begin{keypoint}
+Practical implication, consistent across every capacity and regime tested: $T'{=}10$ already recovers
+most of the $T'{=}50$ accuracy everywhere (full capacity: visually indistinguishable by $T'{=}20$;
+reduced capacity Regime A: $\geq 94\%$ of $T'{=}50$ accuracy for every configuration; reduced capacity
+Regime B: 93--99\% of the $T{=}30$-clamped $T'{=}50$ accuracy for every configuration). Models trained
+and evaluated at the full $T$ throughout this project may be using substantially more simulation time
+than necessary at decode time.
+\end{keypoint}
+
+\FloatBarrier
+
+% ===========================================================================
+\section{What Was Ruled Out: Code vs.\ Methodology Audit}
+\label{sec:part9}
+
+This is a permanent settled-questions record of every anomaly investigated during this project's
+code-vs-methodology audit, so a future reader does not need to re-investigate them. For each: what was
+suspected, what was ruled out, the verdict (code bug vs.\ methodological/metric artifact), and the
+one-line resolution.
+
+\subsection{\texttt{P4BatchNorm2d} Breaking Equivariance After Training (Resolved Before This Audit)}
+
+\textit{Suspected: standard BatchNorm's independent per-orientation-channel statistics might interact
+badly with upright-only training.}
+
+\textbf{Verdict: CONFIRMED CODE ISSUE, already fixed.} Untrained equivariance error $\sim 10^{-6}$;
+after training with standard BatchNorm, $\sim 0.1$--0.2. Resolution: \texttt{P4BatchNorm2d}, sharing
+statistics/affine parameters across the 4 orientation channels, restores $\sim 10^{-6}$ post-training.
+Used throughout every result in this document. This is the one genuine architecture-level bug found and
+fixed in this project.
+
+\subsection{Group-Angle Equivariance-Error Noise (Reports 2--3)}
+
+\textit{Suspected: at exact group angles ($90^\circ/180^\circ/270^\circ$), equivariance error should be
+$\approx 0$ by construction, but was observed 10--100$\times$ higher than expected for some configs,
+inconsistently across seeds.}
+
+\begin{itemize}[leftmargin=1.6em]
+\item \textbf{Ruled out (1):} Rotation-implementation noise (\texttt{grid\_sample} vs.\
+\texttt{torch.rot90}). Max abs pixel difference $\sim 2\times10^{-6}$ (float32 noise floor), 4--5 orders
+of magnitude below the observed 0.01--0.06 errors; feeding the model the bit-exact rotation instead left
+the error unchanged to 6 decimal places.
+\item \textbf{Ruled out (2):} Mode-dependent code branching in \texttt{gconv\_small.py}. \texttt{P4ConvZ2},
+\texttt{P4ConvP4}, \texttt{P4BatchNorm2d}, \texttt{P4GroupPool} contain no reference to \texttt{mode} or
+\texttt{spiking\_layers} anywhere --- one code path for every configuration, confirmed by direct code
+reading, not inference.
+\end{itemize}
+
+\textbf{Verdict: METHODOLOGICAL ARTIFACT, not a code bug.} The evaluation code resets the encoding RNG
+to the same seed value for $x$ and $R_\theta x$. Because rotation moves image content between tensor
+positions, this reproduces the same raw random stream but not a matched spike encoding under rotation
+--- it gives run-to-run reproducibility, not the noise-cancellation the convention seems to have
+intended. Confirmed empirically: re-drawing the encoding seed alone (same model, same probe images, no
+rotation or config change) reproduces the exact reported magnitudes and $\None < \Alternating <
+\FullSpiking$ ordering. Also discovered along the way: layer 1's input is stochastically spike-encoded
+in EVERY configuration, including \None --- ``Analog'' is not literally analog at the input, only in
+its internal layers --- which is why \None\ also showed nonzero, seed-inconsistent noise at group angles
+rather than being immune to the effect. Resolution: Fix 2 (Section~\ref{sec:corrections}), multi-draw
+averaging.
+
+\subsection{$D_{\ell,t}$ Reference-Norm Collapse (Report 3, Experiment 3)}
+
+\textit{Suspected: the deepest layer's $D_{\ell,t}(45^\circ)$ values explode to $\sim 10^7$ because the
+denominator $\|h_{\ell,t}(x)\| + \epsilon$ is near-zero when that timestep's activation is mostly/all
+zero.}
+
+\textbf{Verdict: METHODOLOGICAL/METRIC-DESIGN ARTIFACT, not a model or training bug.} $\epsilon{=}10^{-8}$
+was a fixed global constant; measured layer-5 reference norms directly on real checkpoints and confirmed
+9.5\% of (timestep, image) cells there have a raw norm of EXACTLY zero (the whole 16-unit layer silent
+that timestep), so $\text{denom}{=}\epsilon$ exactly and any nonzero numerator explodes the ratio.
+Layers 1--4 never hit an exact zero in the same probe set --- the problem is specific to the narrowest,
+sparsest layer. Resolution: Fix 1 (Section~\ref{sec:corrections}), layer-relative epsilon plus floor
+masking.
+
+\subsection{Report 1 vs.\ Report 3 Equivariance-Error Direction Reversal}
+
+\textit{Suspected: Report 1 found peak equivariance error highest for \Analog, lowest for \FullSpiking;
+Reports 2--3 found error at $90^\circ$ specifically lowest for \Analog/\None, highest for \FullSpiking
+--- apparently contradictory.}
+
+\textbf{Verdict: NOT A BUG IN EITHER} --- genuinely different quantities being compared (see
+Section~\ref{sec:part5}.1 for the full formula comparison). Confirmed directly: recomputing both
+formulas (raw-logit peak-over-angles; softmax value-at-$90^\circ$) on the IDENTICAL reduced-capacity
+checkpoints reproduces each report's ordering under its own formula --- the formula choice alone flips
+the ranking, not model capacity. Both implementations correctly compute what they claim to; the issue is
+that the two numbers were juxtaposed across reports as if directly comparable ``equivariance error''
+when they are not. Left unreconciled by design (Section~\ref{sec:5.4}).
+
+\subsection{Evolution of the ``\FullSpiking\ Anomaly'' Narrative Across Reports}
+
+For completeness: the understanding of Section~9.2 evolved visibly across this project's own reports,
+and this evolution is itself worth recording so it is not mistaken for inconsistency.
+\texttt{findings\_report\_small.tex} (seed-0-only reading) proposed ``cascaded LIF-threshold
+amplification of spike-sampling stochasticity, scaling with spiking-layer count'' as the explanation,
+based on \FullSpiking\ looking uniquely and reproducibly elevated across its two available regimes.
+\texttt{findings\_report\_t30.tex} (after seed 1 arrived) walked this back: four of five configurations
+showed at least one elevated group-angle value depending on seed, so no single configuration could
+responsibly be called uniquely anomalous at $n{=}2$. The final audit (Section~9.2, this document)
+confirms the original mechanism's core intuition was directionally right (more spiking layers does
+correlate with more noise, confirmed cleanly via the multi-draw experiment in Section~\ref{sec:5.3}) but
+locates the root cause more precisely (RNG/pixel-position mismatch at the stochastically-encoded input,
+present in every configuration including \None, not a LIF-threshold-specific cascade) and treats the
+effect as quantifiable Monte-Carlo variance rather than a per-configuration ``bug.'' Later readings are
+more reliable than earlier ones here; this document uses the final audit's framing throughout.
+
+% ===========================================================================
+\section{Synthesis}
+\label{sec:part10}
+
+Written at the confidence level each finding actually supports --- Section~\ref{sec:5.3}'s now-corrected
+$E_{90}$ finding is not upgraded back to ``clean ordering'' language here just because this is the
+summary.
+
+\begin{enumerate}[leftmargin=1.8em]
+\item \textbf{Accuracy alone is uninformative about spike placement}, at every capacity and regime
+tested. Once training is done properly, all configurations reach rotation-accuracy curves within a few
+points of each other, with one reproducible exception (\HybridEarly's large seed-to-seed variance at
+reduced capacity, absent at full capacity only because Report 1 never trained it).
+\item \textbf{The layer-wise representational collapse at the deepest layer(s) is a genuine, unhedged,
+universal finding}: it appears in every configuration at every capacity tested, including the
+zero-spiking control, and is a property of the $p4$-equivariant architecture's final stages, not of
+spiking dynamics.
+\item \textbf{Rotation sensitivity through spiking time rises quickly and then plateaus} --- it does not
+decay --- in every configuration, every seed, and every regime tested, directly contradicting the
+project's original temporal-contraction hypothesis. Per-configuration differences in the shape of the
+$\mathcal{R}_i$-vs-layer climb (sharp late jump, gradual climb, or flat) are real at full capacity and
+reproduce qualitatively but less cleanly at reduced capacity, where 5 layers give less room to resolve
+the shapes distinctly.
+\item \textbf{Truncated-$T'$ accuracy shows a clean, reproducible, mechanistically sensible ordering}
+across every capacity and regime: more spiking layers means a longer warm-up before rotation-robust
+accuracy structure appears, and $T'{=}10$ recovers most of the full-$T$ accuracy everywhere --- a
+genuine, actionable compute-budget finding.
+\item \textbf{Direct equivariance error tells two different, non-reconciled stories} depending on
+exactly what is measured. At full capacity, peak error over all angles is non-monotonic in spiking
+extent (\Analog\ worst, \FullSpiking\ best) and remains unexplained. At reduced capacity, the corrected
+(multi-draw) $E_{90}$ at exactly $90^\circ$ shows a directionally consistent, cross-regime-reproducible
+ordering ($\None < \Alternating < \FullSpiking$ in the mean) that does NOT achieve clean separation
+between adjacent configurations at $n{=}3$ model seeds --- a real but modest finding, not the ``clean
+ordering'' one of its source reports originally claimed.
+\item \textbf{Experiment 4's Fourier analysis is the project's strongest and most seed-stable
+confirmatory result}: forbidden-mode energy is architecturally pinned near zero regardless of
+configuration or seed, while allowed-mode amplitude (the learned component) varies substantially --- a
+clean empirical separation of what the architecture guarantees from what training actually learns.
+\item \textbf{Two of the three anomalies investigated in this project's code-vs-methodology audit were
+genuine methodological artifacts} (Monte-Carlo spike-encoding noise; a fixed epsilon inappropriate for a
+narrow layer), now corrected in the analysis code; none was a bug in the $p4$-equivariant conv/BatchNorm
+implementation itself, which was independently verified to have no mode-dependent branching. The one
+genuine historical code bug in this project (standard BatchNorm breaking equivariance) was found and
+fixed before this audit began.
+\item \textbf{A recurring methodological lesson across this entire project}, worth stating on its own:
+single-seed or single-draw readings repeatedly looked cleaner than they turned out to be once a second
+seed, a second draw, or a corrected metric arrived (the \FullSpiking-anomaly narrative, the
+$D_{\ell,t}$ collapse-frequency ordering, and the $E_{90}$ ordering all followed this pattern). Every
+finding in this document that still holds at $n{=}3$ seeds has been cross-checked against this pattern
+before being stated plainly.
+\end{enumerate}
+
+% ===========================================================================
+\section{Limitations and Recommended Next Steps}
+\label{sec:part11}
+
+\subsection{Limitations, Consolidated Across All Reports}
+
+\begin{itemize}[leftmargin=1.8em]
+\item \textbf{Seed counts below programme recommendations.} Every seed-averaged number in this document
+uses $n{=}3$ model seeds ($n{=}2$ for several reduced-capacity Regime B representation-level quantities,
+since seed 2's representation analysis was intentionally left incomplete by explicit instruction). The
+Priority Programme recommends $n{=}10$ (Experiment 2) and $n{=}5$ (Experiment 3); this project has not
+reached either.
+\item \textbf{SVCCA absolute-scale caveat.} SVCCA is not on an absolute 0--1 similarity scale ---
+independent, genuinely dissimilar data produces a nonzero baseline of roughly 0.2--0.4 at the batch
+sizes used here. Read SVCCA values relatively (larger = more similar), never as an absolute invariance
+measure.
+\item \textbf{$\mathcal{R}_i$ cross-activation-type scale caveat.} $\mathcal{R}_i$'s absolute magnitude
+depends on whether the underlying activation is a continuous ReLU output or a spike count (the spiking
+configurations' $\mathcal{R}_i$ sits roughly $1000\times$ larger than \Analog/\None's at comparable
+layers). Only within-configuration comparisons (across layers or seeds) are on safe footing;
+cross-configuration comparisons must use shape, not magnitude.
+\item \textbf{Untrained \HybridEarly/\HybridMid\ at full capacity.} Report 1 never trained \HybridEarly\
+or \HybridMid, so Sections~\ref{sec:part3}/\ref{sec:part4}/\ref{sec:part5}/\ref{sec:part8}'s
+full-capacity subsections say nothing about them; only the reduced-capacity reports (which trained
+\HybridEarly, and have no \HybridMid\ analogue at depth 5) cover it.
+\item \textbf{Experiment 1 not run.} A parameter/depth-matched non-equivariant SNN baseline was never
+run at any capacity --- it requires building and training a new architecture, out of scope for every
+pass in this project so far, all of which were either representation-analysis-only or explicitly
+no-retraining.
+\item \textbf{Probe-set quantization.} Report 3's 32-image fixed probe set quantizes accuracy-derived
+quantities ($D_s$ in particular) in steps of $1/32 \approx 3.1\%$; this is why Experiment 2's $D_s$
+should be read as indicative, not precise, at this probe-set size.
+\item \textbf{$D_{\ell,t}$ 45-vs-90 comparison still limited at layer 5.} The Fix 1 correction addresses
+the reference-norm-collapse artifact, but Experiment 3's original design goal (cleanly comparing
+$D_{\ell,t}$ at $\theta{=}45^\circ$ vs.\ $\theta{=}90^\circ$ to show the exact-group-angle guarantee
+reducing sensitivity specifically at $90^\circ$) is still not achievable at the deepest layer even
+post-fix, since both angles are compared against the same reference representation and are equally
+exposed to any residual near-zero-norm cells.
+\item \textbf{Upstream-sparsity-propagation mechanism unconfirmed.} The claim that sparsity from an
+upstream spiking layer propagates into a downstream analog layer's collapse frequency
+(Section~\ref{sec:part6}.3) is a plausible, mechanistically motivated reading of the corrected data, not
+a directly verified mechanism (e.g.\ via direct inspection of layer 4's pre-layer-5 output sparsity per
+configuration).
+\item \textbf{\HybridEarly\ seed-2 instability uninvestigated.} \HybridEarly's large seed-2 accuracy
+instability (Section~\ref{sec:part2}.2--2.3) was noted in both reduced-capacity regimes but never
+investigated further --- unclear if it is a property of that configuration at this capacity or an
+isolated bad initialization.
+\end{itemize}
+
+\subsection{Recommended Next Steps, Prioritized Against the Sept 19 Abstract / Sept 24 Full-Paper Deadlines}
+
+\textit{Today's date: August 31, 2026 --- roughly 19 days to the abstract deadline, 24 to the full paper.}
+
+\begin{enumerate}[leftmargin=1.8em]
+\item \textbf{Immediate (before Sept 19), zero additional compute:} both corrections (Fix 1, Fix 2) are
+already applied and this document already reflects them --- no further action needed before the
+abstract; simply draw the abstract's claims from Sections~\ref{sec:5.3}, \ref{sec:part6}, and
+\ref{sec:part7} of this document rather than the superseded single-draw/fixed-epsilon numbers in the
+original Report 2/3 files.
+\item \textbf{Cheap, before Sept 24:} directly test the upstream-sparsity-propagation mechanism
+(Section~\ref{sec:part6}.3/\ref{sec:part11}.1) by inspecting layer 4's pre-layer-5 output sparsity per
+configuration on existing checkpoints --- cheap, no retraining, would upgrade a plausible reading to a
+confirmed one before the full paper.
+\item \textbf{Moderate effort, before Sept 24 if time allows:} if GPU time allows before the full-paper
+deadline, add 2 more model seeds (to $n{=}5$) for Experiment 2's $E_{90}$ specifically, since
+Section~\ref{sec:5.3} identified overlapping mean$\pm$std bands between adjacent configurations as the
+main remaining weakness in an otherwise cross-regime-consistent finding --- this is the single
+highest-leverage additional-compute item in the project given it directly strengthens the report's most
+novel corrected finding.
+\item \textbf{Moderate effort:} complete reduced-capacity Regime B seed 2's representation-level
+analysis (a few-minutes-per-stage job) to bring Sections~\ref{sec:part4}/\ref{sec:part6}/\ref{sec:part8}'s
+Regime B tables from $n{=}2$ to $n{=}3$, matching Regime A.
+\item \textbf{Larger effort, only if time remains after the above:} train \HybridEarly\ and \HybridMid\
+at full capacity, extending Sections~\ref{sec:part3}--\ref{sec:part5}/\ref{sec:part8}'s full-capacity
+subsections to the same 5-configuration coverage the reduced-capacity reports already have; run a
+controlled ablation isolating which of \texttt{P4BatchNorm2d}/longer training/higher $T$ explains the
+original compute-constrained draft's non-replicating findings (Section~\ref{sec:part2}.1).
+\item \textbf{Largest effort, full-paper timeframe only:} Experiment 1 (parameter/depth-matched
+non-equivariant SNN baseline) --- the largest remaining lift in the project, requiring a new
+architecture and full retraining; realistically a full-paper-cycle item rather than an abstract-cycle
+one.
+\end{enumerate}
+
+\end{document}

@@ -1,0 +1,543 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+
+\newcommand{\None}{\textsc{None (Analog)}}
+\newcommand{\Alternating}{\textsc{Alternating}}
+\newcommand{\FullSpiking}{\textsc{Full Spiking}}
+\newcommand{\HybridLate}{\textsc{Hybrid Late}}
+\newcommand{\HybridEarly}{\textsc{Hybrid Early}}
+
+\newtcolorbox{keypoint}{%
+  colback=black!3, colframe=black!60, boxrule=0.6pt, arc=1pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt
+}
+
+\title{\Large Results Report:\\
+Representation-Level Analysis of Rotation Invariance\\
+in Spiking and Analog $p4$-Equivariant CNNs\\
+\large Reduced-Capacity Companion Study (2{,}420 Parameters, $T{=}30$, 5-Epoch Regime)}
+\author{Sahil Singh\\
+CMI Summer Research Internship\\
+Supervisor: Prof. K.V. Subrahmanyam}
+\date{August 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report repeats the representation-level analysis of the companion report
+\emph{Representation-Level Analysis of Rotation Invariance in Spiking and Analog $p4$-Equivariant
+CNNs} on a deliberately harder capacity budget \emph{and} a shorter compute budget: a 5-layer,
+4-channel, 2{,}420-parameter \texttt{SpikingP4CNNSmall} ($10.2\times$ fewer parameters than the
+companion report's 7-layer, 10-channel, 24{,}744-parameter model), trained with $T=30$ simulation
+timesteps for 5 epochs (versus the companion report's $T=50$, 20 epochs), across five spike-placement
+configurations (\None, \Alternating, \FullSpiking, \HybridEarly, \HybridLate) --- all five
+configurations implemented in the codebase, of which the companion report trained only four. Three
+independent training seeds ($\{0,1,2\}$) were trained to completion for every configuration; the
+representation-level analysis (layer-wise similarity, per-neuron rotation sensitivity, truncated-$T'$
+accuracy, direct equivariance error) was completed for seeds 0 and 1, and is reported on that basis ---
+seed 2's representation-level analysis was intentionally left incomplete and is not included in any
+seed-averaged number below (Section~\ref{sec:limitations}). The depth-wise representational collapse
+and the ``rise-then-plateau'' (not decay) temporal rotation-sensitivity pattern both replicate cleanly
+at this reduced capacity and compute budget. The companion report's non-monotonic peak-equivariance-error
+finding does not replicate in the same direction; moreover, once a second seed's variance is actually
+included, no single configuration stands out as reliably, reproducibly anomalous at the group-invariance
+angles the way a single-seed reading initially suggested --- the honest reading, at $n=2$ seeds, is that
+group-angle equivariance error is noisy across seeds for every configuration at this capacity, with
+standard deviations frequently as large as the means themselves.
+\end{abstract}
+
+\tableofcontents
+
+\section{How to Read This Report}
+
+This report mirrors the structure of the companion (full-capacity) report section for section, so the
+two can be read side by side. Section~\ref{sec:notation} restates the notation (unchanged in
+substance, only in the layer count $L=5$). Section~\ref{sec:setup} describes the reduced architecture,
+the five configurations, and the $T=30$/5-epoch training regime specifically. Sections
+\ref{sec:finding1}--\ref{sec:finding4} present the results. Given this report covers 5 configurations
+$\times$ up to 3 seeds, cross-configuration comparison plots and seed-averaged tables are used as the
+primary evidence, with representative per-seed figures included alongside; the complete figure set is
+on \texttt{gpuserver.cmi.ac.in} under \texttt{\textasciitilde/snn/plots\_small\_t30/repr\_seed\{0,1,2\}/}.
+
+\section{Notation for Internal Representations}
+\label{sec:notation}
+
+Identical in substance to Section~2 of the companion report, with $L=5$ in place of $L=7$. The
+network consists of layers $x \to L_1 \to \cdots \to L_5$, $x$ a $28\times28$ digit image (class 3,
+4, 8, or 9). $h_\ell(x) = (a_1(x),\ldots,a_{n_\ell}(x))$ is the accumulated-spike-count representation
+of layer $\ell$, $a_i(x) = \sum_{t=1}^{T} S_i(t)$ (analog layers treated as $T=1$). Representation
+similarity uses cosine similarity, CKA (batch-side Gram formulation), and SVCCA (batch-to-neuron
+ratio $\geq 10\times$ enforced). Rotation sensitivity $\mathcal{R}_i = \mathrm{Var}_\theta(a_i(R_\theta x))$
+over 24 test angles, with temporal variant $\mathcal{R}_i(t)$ from instantaneous per-timestep spikes.
+Direct equivariance error
+\[
+\text{Equivariance error}(\theta) \;=\; \frac{\|f(R_\theta x) - f(x)\|}{\|f(x)\|},
+\]
+guaranteed exactly 0 at $\theta \in \{0^\circ,90^\circ,180^\circ,270^\circ\}$ by construction.
+Truncated-$T'$ accuracy decodes from only the first $T' \in \{1,5,10,20,50\}$ timesteps -- note $T'$
+can exceed the training/simulation $T=30$ used in this report; $T'=50$ is clamped to the full $T=30$
+trial internally and is reported for consistency with the companion report's $T'$ grid, but is
+identical to the model's ordinary full-trial decode here.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\begin{keypoint}
+Every result below is computed on the same 4-class rotated-MNIST task as the companion report
+(digits 3, 4, 8, 9), trained on upright ($\theta=0^\circ$) images only and evaluated at
+$\theta \in \{0^\circ, 15^\circ, \ldots, 345^\circ\}$ (24 angles), for each of five spike-placement
+configurations, at \textbf{$T=30$ simulation timesteps, 5 training epochs}.
+\end{keypoint}
+
+\subsection{Architecture: Reduced-Capacity $p4$-Equivariant Backbone}
+\label{sec:arch}
+
+All five configurations share an identical 5-layer $p4$-equivariant CNN backbone:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Layer & Operation & Spatial size \\
+\midrule
+$L_1$ & \texttt{P4ConvZ2}, $1{\to}4$ channels, $3\times3$ & $28\times28 \to 26\times26$ \\
+$L_2$ & \texttt{P4ConvP4}, $4{\to}4$ channels, $3\times3$ + maxpool $2\times2$ & $26\times26 \to 24\times24 \to 12\times12$ \\
+$L_3$ & \texttt{P4ConvP4}, $4{\to}4$ channels, $3\times3$ + maxpool $2\times2$ & $12\times12 \to 10\times10 \to 5\times5$ \\
+$L_4$ & \texttt{P4ConvP4}, $4{\to}4$ channels, $3\times3$ & $5\times5 \to 3\times3$ \\
+$L_5$ & \texttt{P4ConvP4}, $4{\to}4$ channels, $3\times3$ & $3\times3 \to 1\times1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+followed by group-pooling (max over the 4 orientation channels) and a linear classifier --- the same
+qualitative shape as the companion report's backbone, but depth cut from 7 to 5 layers and width cut
+from 10 to 4 channels per layer. Total parameter count: \textbf{2{,}420}, identical across all five
+configurations, a $10.2\times$ reduction from the companion report's 24{,}744. \texttt{P4BatchNorm2d}
+(sharing statistics/affine parameters across the 4 orientation channels) is used throughout, as in the
+companion report.
+
+\subsection{Configurations}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Configuration} & \textbf{Spiking layers} & \textbf{Description} \\
+\midrule
+\None & none & Zero-spiking control / ceiling reference \\
+\Alternating & 2, 4 & Spiking interleaved with analog throughout depth \\
+\FullSpiking & all 1--5 & Maximal spiking \\
+\HybridEarly & 1, 2 & Spiking confined to near the input \\
+\HybridLate & 5 only & Spiking confined to near the output \\
+\bottomrule
+\end{tabular}
+\caption{The five spike-placement configurations analyzed in this report -- all five implemented
+configurations, versus the companion report's four.}
+\label{tab:configs}
+\end{table}
+
+\subsection{Training and Evaluation}
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Input encoding.} Poisson rate coding over $T=30$ simulation timesteps.
+\item \textbf{Task.} 4-class rotated-MNIST, digits $\{3,4,8,9\}$.
+\item \textbf{Training.} Upright ($0^\circ$) images only, Adam, learning rate $10^{-3}$, batch size
+64, \textbf{5 epochs}, best checkpoint selected by $0^\circ$ test accuracy.
+\item \textbf{Evaluation.} Full 24-angle sweep, held-out test split.
+\item \textbf{Seeds.} Three independent training runs per configuration ($\{0,1,2\}$), all trained to
+completion; representation-level analysis completed for seeds 0 and 1 (Section~\ref{sec:limitations}).
+\item \textbf{Hardware.} \texttt{gpuserver.cmi.ac.in}.
+\end{itemize}
+
+\subsection{Relation to the Companion (Full-Capacity, $T{=}50$) Report}
+
+The companion report used $T=50$, 20 epochs, 24{,}744 parameters, and reported: (1) accuracy alone
+barely differs across configurations; (2) a representational collapse at the deepest layers occurs in
+every configuration including the non-spiking control; (3) rotation sensitivity through spiking time
+plateaus rather than decays; (4) direct equivariance error is non-monotonic in spiking extent, with
+the non-spiking control showing the \emph{highest} peak error and full spiking the \emph{lowest}.
+Sections~\ref{sec:finding1}--\ref{sec:finding4} test each of these against $10.2\times$ less capacity,
+$40\%$ less simulation time, and a quarter of the training epochs.
+
+\section{Baseline: Multi-Seed Accuracy Comparison}
+\label{sec:baseline}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Configuration} & Best $0^\circ$ acc.\ (\%), mean $\pm$ std, 3 seeds & Mean acc.\ over 24 angles (\%), pooled 3 seeds \\
+\midrule
+\None            & $97.25 \pm 0.34$ & $84.52$ \\
+\Alternating     & $96.71 \pm 0.12$ & $86.87$ \\
+\FullSpiking     & $95.14 \pm 0.53$ & $84.31$ \\
+\HybridEarly     & $91.39 \pm 5.71$ & $77.86$ \\
+\HybridLate      & $97.09 \pm 0.08$ & $82.03$ \\
+\bottomrule
+\end{tabular}
+\caption{Best upright ($0^\circ$) test accuracy and mean accuracy over the full 24-angle sweep, all
+three training seeds (0, 1, 2 -- training completed for all three regardless of the
+representation-analysis scope note in Section~\ref{sec:limitations}).}
+\label{tab:baseline}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small_t30/small_n5_comparison.png}
+\caption{Config comparison, 4-class rotation-angle sweep, mean $\pm$ std over $n=3$ seeds, all 5
+configurations. \texttt{plots\_small\_t30/small\_n5\_comparison.png}}
+\end{figure}
+
+\FloatBarrier
+As in the companion report, the five configurations' rotation-accuracy curves sit within a few
+percentage points of each other. \textbf{Unlike} the companion report (which never trained
+\HybridEarly), one configuration shows a conspicuously large seed-to-seed standard deviation:
+\HybridEarly\ at $\pm 5.71$, driven by a single unstable seed (seed 2: 83.33\% best-upright-accuracy,
+versus $\geq 95\%$ for seeds 0 and 1). This instability is plausibly a capacity effect: at only 4
+channels, \HybridEarly's spiking layers 1--2 sit immediately after the lifting convolution, where the
+network has the least redundancy to absorb a bad initialization's interaction with the
+surrogate-gradient spiking nonlinearity.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small_t30/small_none_rotation_curve_training_curves.png}\\[6pt]
+\includegraphics[width=0.85\textwidth]{plots_small_t30/small_none_rotation_curve.png}
+\caption{\None-only rotation curve (mean $\pm$ std over 3 seeds), alongside per-seed training-loss and
+upright-accuracy curves. \texttt{plots\_small\_t30/small\_none\_rotation\_curve\_training\_curves.png}
+and \texttt{plots\_small\_t30/small\_none\_rotation\_curve.png}}
+\end{figure}
+
+\FloatBarrier
+
+\section{Finding 1 --- Layer-wise Emergence of Invariance (Experiment 5.1)}
+\label{sec:finding1}
+
+\subsection{Setup}
+
+For an image $x$ and its rotated version $R_\theta x$, we compute $h_\ell(x)$ and $h_\ell(R_\theta x)$
+at every hidden layer $\ell=1,\ldots,5$ and measure similarity using cosine similarity, CKA, and
+SVCCA, per configuration, seeds 0 and 1.
+
+\subsection{Result: The Depth-Wise Collapse Survives at Reduced Depth and Compute}
+
+Similarity to the upright representation stays high through the early-to-middle layers and drops at
+the final layer(s), in every configuration and both seeds analyzed, including \None, the zero-spiking
+control. The companion report's central claim --- that the collapse is a property of the
+$p4$-equivariant architecture's final stages (group-pooling and linear classifier), not of spiking
+dynamics --- holds at $10.2\times$ less capacity, $40\%$ less simulation time, and a quarter of the
+training epochs.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{plots_small_t30/repr_seed0/similarity_comparison_cka.png}
+\caption{Seed 0 --- CKA similarity to upright vs.\ layer, all 5 configurations overlaid.
+\texttt{plots\_small\_t30/repr\_seed0/similarity\_comparison\_cka.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{plots_small_t30/repr_seed1/similarity_comparison_cka.png}
+\caption{Seed 1, same comparison. \texttt{plots\_small\_t30/repr\_seed1/similarity\_comparison\_cka.png}}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Per-Configuration, All-Three-Metrics Detail}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/similarity_by_layer_none.png}
+\caption{\None, seed 0 --- cosine / CKA / SVCCA vs.\ layer.
+\texttt{plots\_small\_t30/repr\_seed0/similarity\_by\_layer\_none.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/similarity_by_layer_full.png}
+\caption{\FullSpiking, seed 0. \texttt{plots\_small\_t30/repr\_seed0/similarity\_by\_layer\_full.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/similarity_by_layer_hybrid_early.png}
+\caption{\HybridEarly, seed 0 --- newly covered relative to the companion report.
+\texttt{plots\_small\_t30/repr\_seed0/similarity\_by\_layer\_hybrid\_early.png}}
+\end{figure}
+
+\FloatBarrier
+As in the companion report, cosine similarity is markedly lower and noisier than CKA/SVCCA throughout
+(exact neuron-by-neuron agreement required, no tolerance for internal reshuffling), while CKA and
+SVCCA agree closely except at the deepest layer.
+
+\subsection{Interpretation}
+
+The depth-wise collapse is confirmed, at $10.2\times$ less capacity, $40\%$ less simulation time, and
+a quarter of the training epochs, to be an architectural signature rather than a spiking one: it
+appears in \None\ (zero spiking neurons anywhere) in both seeds analyzed. Spike placement's modulation
+of \emph{where} the divergence first becomes visible is harder to isolate cleanly with only 5 layers
+to distribute the effect across --- a genuine capacity-driven limitation on how finely this secondary
+claim can be tested here, not a contradiction of it.
+
+\section{Finding 2 --- Rotation Sensitivity of Individual Neurons, by Layer and by Time (Experiments 5.3, 5.4)}
+\label{sec:finding2}
+
+\subsection{5.3 --- Distribution of $\mathcal{R}_i$ Across Layers}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{plots_small_t30/repr_seed0/rotsens_median_comparison.png}
+\caption{Seed 0 --- median $\mathcal{R}_i$ per layer, all 5 configurations overlaid (log scale).
+\texttt{plots\_small\_t30/repr\_seed0/rotsens\_median\_comparison.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/rotsens_boxplot_full.png}
+\caption{\FullSpiking, seed 0 --- $\mathcal{R}_i$ distribution by layer.
+\texttt{plots\_small\_t30/repr\_seed0/rotsens\_boxplot\_full.png}}
+\end{figure}
+
+\FloatBarrier
+All five configurations place the final layer at or near the top of the $\mathcal{R}_i$ ranking,
+consistent with Finding~1's identification of the last layer(s) as where invariance breaks down. This
+pattern was checked against a third, partially-analyzed seed (seed 2, rotation-sensitivity stage only
+--- see Section~\ref{sec:limitations}) and holds there too, giving some additional confidence in this
+particular finding beyond the two fully-analyzed seeds.
+
+\subsection{5.4 --- Rotation Sensitivity Through Time}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{plots_small_t30/repr_seed0/rotsens_temporal_full.png}
+\caption{\FullSpiking, seed 0 --- median $\mathcal{R}_i(t)$ vs.\ timestep, all 5 layers, $T=30$.
+\texttt{plots\_small\_t30/repr\_seed0/rotsens\_temporal\_full.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{plots_small_t30/repr_seed1/rotsens_temporal_full.png}
+\caption{\FullSpiking, seed 1, same quantity. \texttt{plots\_small\_t30/repr\_seed1/rotsens\_temporal\_full.png}}
+\end{figure}
+
+\FloatBarrier
+\textbf{Observation (rise-then-plateau reproduces).} $\mathcal{R}_i(t)$ rises quickly over the first
+several timesteps and then plateaus, with no visible downward trend for the rest of the (shorter,
+30-timestep) simulation, in both seeds and every configuration. This directly reproduces the companion
+report's Finding~2 conclusion at a $40\%$-shorter compute budget: the plateau, not a decay, is the
+robust phenomenon.
+
+\section{Finding 3 --- Temporal Evolution of Invariance via Truncated-$T'$ Accuracy (Experiment 5.7)}
+\label{sec:finding3}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/truncated_T_by_angle_full.png}
+\caption{\FullSpiking, seed 0 --- accuracy vs.\ angle at $T' = 1,5,10,20,50$ (clamped to the full
+$T=30$ trial), matching the companion report's Figure~42 style.
+\texttt{plots\_small\_t30/repr\_seed0/truncated\_T\_by\_angle\_full.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small_t30/repr_seed0/truncated_T_by_angle_hybrid_late.png}
+\caption{\HybridLate, seed 0. \texttt{plots\_small\_t30/repr\_seed0/truncated\_T\_by\_angle\_hybrid\_late.png}}
+\end{figure}
+
+\FloatBarrier
+As in the companion report, \FullSpiking's $T'=1$ curve is close to chance across every angle, while
+\HybridLate's $T'=1$ curve already substantially tracks the shape of its full-trial curve. The
+companion report's ``more spiking layers $\Rightarrow$ longer warm-up'' ordering reproduces at reduced
+depth and compute budget.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Configuration} & $T'{=}1$ & $T'{=}5$ & $T'{=}10$ & $T'{=}20$ & $T'{=}50$ \\
+\midrule
+\None          & $73.1 \pm 6.1\%$  & $80.9 \pm 4.0\%$  & $83.2 \pm 3.7\%$ & $84.5 \pm 3.1\%$ & $84.8 \pm 3.0\%$ \\
+\Alternating   & $45.5 \pm 6.6\%$  & $79.6 \pm 12.6\%$ & $83.9 \pm 9.7\%$ & $85.1 \pm 9.0\%$ & $84.9 \pm 9.0\%$ \\
+\FullSpiking   & $34.3 \pm 6.9\%$  & $66.1 \pm 17.4\%$ & $78.6 \pm 8.9\%$ & $82.0 \pm 4.8\%$ & $83.3 \pm 4.3\%$ \\
+\HybridEarly   & $46.3 \pm 16.4\%$ & $61.5 \pm 9.7\%$  & $74.7 \pm 0.6\%$ & $79.8 \pm 2.7\%$ & $81.1 \pm 3.8\%$ \\
+\HybridLate    & $60.3 \pm 9.1\%$  & $76.0 \pm 7.3\%$  & $79.1 \pm 6.0\%$ & $80.3 \pm 6.7\%$ & $81.5 \pm 6.3\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Truncated-$T'$ accuracy, mean over all 24 test angles $\times$ probe images, mean $\pm$ std
+over seeds $\{0,1\}$. Note $T'{=}50$ is clamped to the full $T=30$ trial and is not a distinct,
+larger-$T'$ measurement in this regime.}
+\label{tab:truncT}
+\end{table}
+
+\noindent \textbf{Compute-budget observation:} for every configuration, $T'=10$ already recovers
+roughly $93$--$99\%$ of the ($T'$-clamped) $T'=50$ accuracy, confirming that even within an
+already-reduced $T=30$ budget, decoding does not need the full trial length to recover most of the
+rotation-robust accuracy.
+
+\section{Finding 4 --- Direct Equivariance Error (Experiment 5.8)}
+\label{sec:finding4}
+
+\subsection{The Expected Sawtooth, Confirmed}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small_t30/repr_seed0/equivariance_error_comparison.png}
+\caption{Seed 0 --- direct equivariance error vs.\ angle, all 5 configurations overlaid.
+\texttt{plots\_small\_t30/repr\_seed0/equivariance\_error\_comparison.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small_t30/repr_seed1/equivariance_error_comparison.png}
+\caption{Seed 1, same comparison. \texttt{plots\_small\_t30/repr\_seed1/equivariance\_error\_comparison.png}}
+\end{figure}
+
+\FloatBarrier
+The sawtooth pattern --- error at (or extremely near) 0 at the four group angles, rising to a local
+maximum near the midpoints between them --- is confirmed in every configuration and both seeds, a
+sanity check that \texttt{P4BatchNorm2d}'s equivariance guarantee holds after training at this reduced
+capacity and compute budget too.
+
+\subsection{Group-Angle Error Is Noisy Across Seeds for Every Configuration: A Cautionary Result}
+\label{sec:anomaly}
+
+A single-seed reading (seed 0 alone) initially suggested \FullSpiking\ was uniquely anomalous at the
+group-invariance angles, with error one to two orders of magnitude above every other configuration's
+$\sim 10^{-3}$ level. Seed 1's data, obtained independently, does \emph{not} support that being a
+clean, reproducible per-configuration property:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Configuration} & Mean err.\ & Max err.\ & Err.\ at $90^\circ$ & Err.\ at $180^\circ$ & Err.\ at $270^\circ$ \\
+\midrule
+\None          & $0.228 \pm 0.027$ & $0.481 \pm 0.038$ & $0.0066 \pm 0.0041$ & \bfseries $0.0133 \pm 0.0094$ & $0.0061 \pm 0.0036$ \\
+\Alternating   & $0.185 \pm 0.080$ & $0.530 \pm 0.231$ & \bfseries $0.0444 \pm 0.0419$ & $0.0087 \pm 0.0078$ & $0.0156 \pm 0.0147$ \\
+\FullSpiking   & $0.235 \pm 0.012$ & $0.431 \pm 0.059$ & $0.0180 \pm 0.0059$ & \bfseries $0.0373 \pm 0.0209$ & $0.0141 \pm 0.0032$ \\
+\HybridEarly   & $0.260 \pm 0.034$ & $0.570 \pm 0.125$ & \bfseries $0.0337 \pm 0.0064$ & $0.0242 \pm 0.0072$ & \bfseries $0.0292 \pm 0.0042$ \\
+\HybridLate    & $0.237 \pm 0.063$ & $0.557 \pm 0.145$ & $0.0066 \pm 0.0027$ & $0.0066 \pm 0.0017$ & $0.0089 \pm 0.0057$ \\
+\bottomrule
+\end{tabular}
+\caption{Equivariance error, mean $\pm$ std over seeds $\{0,1\}$, $T=30$. Bold: at least one
+group-angle mean above $0.01$ (two orders of magnitude above the companion report's uniform
+$\sim 10^{-3}$--$10^{-4}$ level). At $n=2$ seeds, note the standard deviations are frequently
+comparable to or larger than the means themselves.}
+\label{tab:eqerr}
+\end{table}
+
+\noindent With only seed 0's data, \FullSpiking\ looked uniquely and severely elevated. With seed 1
+included, \emph{four of the five configurations} (\None, \Alternating, \FullSpiking, \HybridEarly) show
+at least one group-angle mean above the $0.01$ threshold, each driven by a different angle, and
+\HybridLate\ is, in this small sample, the only configuration with all three group-angle means
+comfortably below it. The magnitude of the seed-to-seed standard deviations (e.g.\ \Alternating's
+$90^\circ$ value: $0.044 \pm 0.042$, a coefficient of variation near 1) makes it clear that $n=2$ is
+not enough to responsibly identify \emph{which} configuration, if any, is uniquely anomalous here ---
+the honest reading is that group-angle equivariance error is noisy across seeds for every
+configuration at this reduced capacity, not that any one configuration has a distinctive, reproducible
+failure mode.
+
+\paragraph{What was ruled out.} Before seed 1's data arrived, two candidate explanations for seed 0's
+apparent \FullSpiking\ anomaly were tested directly. \emph{Rotation-interpolation noise:} the
+evaluation code's $90^\circ$ \texttt{grid\_sample} rotation was compared against a bit-exact
+\texttt{torch.rot90} of the same probe batch; maximum absolute pixel difference was $\sim 2\times10^{-6}$
+(float32 noise floor), and feeding the model the bit-exact rotation instead left the equivariance
+error unchanged to 6 decimal places --- ruled out. \emph{A configuration-specific code bug:}
+\texttt{gconv\_small.py}'s \texttt{P4ConvZ2}/\texttt{P4ConvP4}/\texttt{P4BatchNorm2d} contain no
+mode-dependent branching; every configuration shares identical deterministic conv-rotation and
+shared-statistics BatchNorm machinery, and only which layers route through the LIF neuron versus ReLU
+differs --- a shared-code bug would need to misbehave identically regardless of configuration, which
+does not fit an effect that (as Table~\ref{tab:eqerr} now shows) appears, to varying degrees and at
+different angles, in four of five configurations depending on seed. Both rule-outs remain valid; what
+changed is the confidence that \FullSpiking\ specifically is the locus of the effect.
+
+\paragraph{Leading explanation, revised.} The Poisson/Bernoulli input encoding is stochastic in every
+configuration, and the evaluation code's ``same random seed for $x$ and $R_\theta x$'' convention
+aligns the RNG stream by flat tensor position, not by logical pixel identity --- rotating an image
+permutes which pixel occupies each position, so the intended noise-cancellation does not land on the
+same logical pixel post-rotation. This structural mismatch exists at the input layer of every
+configuration regardless of how many downstream layers spike, and Table~\ref{tab:eqerr} is consistent
+with it manifesting as seed-dependent noise in \emph{which} configuration's checkpoint happens to have
+a decision boundary sensitive to it near a given group angle, rather than a monotonic amplification
+specifically tied to spiking-layer count as a single-seed reading first suggested.
+
+\subsection{Peak Magnitude Does Not Reproduce the Companion Report's Ordering}
+
+The companion report found peak equivariance error non-monotonic in spiking extent, with \None\
+highest ($\sim 0.58$--$0.59$) and \FullSpiking\ lowest ($\sim 0.33$--$0.42$). Here (Table~\ref{tab:eqerr}),
+\HybridEarly\ has the highest 2-seed-mean max error ($0.570$) and \FullSpiking\ the lowest ($0.431$)
+--- not the companion report's ordering, though \FullSpiking\ being on the low end for max error is at
+least directionally consistent with it. Given Section~\ref{sec:anomaly}'s finding that even 2 seeds
+substantially reshuffle which configuration looks most/least anomalous, no strong claim about a
+reproducible non-monotonic ordering can be made from this reduced-capacity, $n=2$-seed data.
+
+\section{Synthesis}
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Accuracy alone remains uninformative at reduced capacity and compute.} All five
+configurations reach broadly similar rotation-accuracy curves (Table~\ref{tab:baseline}), with one
+exception: \HybridEarly's large seed-to-seed variance, a new instability not observed in the companion
+report (which never trained this configuration).
+\item \textbf{The depth-wise representational collapse reproduces} at $10.2\times$ less capacity,
+$40\%$ less simulation time, and a quarter of the training epochs, in every configuration including
+the non-spiking control.
+\item \textbf{The plateau-not-decay temporal result reproduces exactly}, directly repeating the
+companion report's contradiction of the research plan's temporal-contraction hypothesis, even at this
+shorter compute budget.
+\item \textbf{The compute-budget speculation is confirmed}: $T'=10$ recovers the large majority of
+full-trial accuracy in every configuration.
+\item \textbf{The non-monotonic peak-equivariance-error ordering does not reproduce}, and --- the most
+important methodological lesson of this report --- a single-seed anomaly (\FullSpiking\ at the group
+angles) that looked clean and mechanistically explicable did \emph{not} survive the addition of a
+second seed. Group-angle equivariance error at this reduced capacity is better described as noisy
+across seeds for every configuration than as a reproducible per-configuration failure mode.
+\end{enumerate}
+
+\section{Limitations and Next Steps}
+\label{sec:limitations}
+
+\subsection{Limitations of This Analysis}
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Seed 2's representation-level analysis is intentionally incomplete.} All three seeds
+were trained to completion (Table~\ref{tab:baseline} uses all three), but by explicit choice no
+further compute was spent completing seed 2's representation-level analysis: its rotation-sensitivity
+stage (Finding~2, \S\ref{sec:finding2}) finished for all 5 configurations and was used as a qualitative
+cross-check only; its equivariance-error stage produced only 4 of 5 configurations and no comparison
+plot; its representation-similarity and truncated-$T'$ stages did not run at all. No table in this
+report includes seed 2.
+\item Section~\ref{sec:anomaly}'s $n=2$ seed-averaged equivariance-error table has standard deviations
+frequently comparable to or larger than the means; it should be read as evidence that the effect is
+noisy, not as a precise estimate of any configuration's true group-angle error.
+\item As in the companion report, SVCCA values are not on an absolute 0--1 scale and $\mathcal{R}_i$'s
+absolute scale is not comparable across spiking vs.\ analog layers.
+\item \HybridEarly's seed-2 accuracy instability (Table~\ref{tab:baseline}) was not investigated
+further.
+\end{itemize}
+
+\subsection{Recommended Next Steps}
+\begin{enumerate}[leftmargin=1.5em]
+\item Complete seed 2's representation-level analysis (a $\sim$few-minute job per stage on either
+GPU) before drawing any firmer conclusion in Section~\ref{sec:anomaly} -- $n=3$ would meaningfully
+tighten the standard deviations in Table~\ref{tab:eqerr}.
+\item If the noisy-group-angle-error picture holds at $n=3$, directly trace realized spike trains
+under explicit pixel-correspondence to test the RNG-mismatch mechanism, since the current evidence for
+it is indirect (rule-outs of two alternative explanations, not a positive confirmation).
+\item Investigate \HybridEarly's seed-2 accuracy instability with additional seeds.
+\end{enumerate}
+
+\end{document}

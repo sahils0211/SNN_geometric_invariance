@@ -1,0 +1,390 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+
+\newcommand{\None}{\textsc{Analog $p4$}}
+\newcommand{\Alternating}{\textsc{Alternating $p4$}}
+\newcommand{\FullSpiking}{\textsc{Full Spiking $p4$}}
+
+\newtcolorbox{keypoint}{%
+  colback=black!3, colframe=black!60, boxrule=0.6pt, arc=1pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt
+}
+
+\title{\Large Results Report:\\
+Priority Experimental Programme --- Experiments 2--4\\
+\large Spike Placement, Layer/Time Sensitivity, and Fourier Analysis\\
+on the Reduced-Capacity (2{,}420-Parameter) $p4$-Equivariant SNN}
+\author{Sahil Singh\\
+CMI Summer Research Internship\\
+Supervisor: Prof. K.V. Subrahmanyam}
+\date{August 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report runs Experiments 2, 3, and 4 of the ``Priority Experimental Programme'' proposed in
+\emph{Additional Experiments (Spike Dynamics)} on the reduced-capacity (5-layer, 4-channel,
+2{,}420-parameter) \texttt{SpikingP4CNNSmall}, using \textbf{exclusively already-trained checkpoints}
+(three seeds $\{0,1,2\}$, two independent regimes: $T{=}50$/10 epochs and $T{=}30$/5 epochs) --- no
+model was retrained for this report. Experiment 1 (a matched non-equivariant SNN baseline) is not
+covered here, since it requires building and training an entirely new architecture and is out of
+scope for a no-retraining pass. Experiment 2 (does spike placement matter, holding $p4$ fixed) finds
+that Analog, Alternating, and Full Spiking $p4$ reach statistically indistinguishable rotation-accuracy
+curves, but --- using a probe set held fixed across seeds, a methodological refinement over the
+per-seed-varying probe sets used in the earlier representation-level report --- reveals a clean,
+monotonic ordering in the direct group-angle equivariance error $E_{90}$ (Full Spiking $>$ Alternating
+$>$ Analog) that reproduces in \emph{both} training regimes. Experiment 3 (layer/time representation
+distance $D_{\ell,t}(\theta)$) surfaces an unplanned but mechanistically clear finding: the deepest
+layer's distance metric is numerically dominated, at a substantial fraction of timesteps, by
+near-zero-norm reference representations, and the frequency of this effect tracks whether the
+\emph{immediately upstream} layer is spiking (sparsity propagates forward into an analog layer) far
+more than whether the layer itself spikes. Experiment 4 (Fourier decomposition of the rotation
+response) directly confirms the $p4$ architecture's exact-symmetry prediction: forbidden Fourier
+energy $E_{\text{forbidden}} \approx 0$, essentially independent of configuration and seed, while the
+allowed harmonics' amplitudes (dominated by $k{=}4$) vary substantially across seeds -- exactly the
+architecture-vs-optimization distinction the experimental programme was designed to isolate.
+\end{abstract}
+
+\tableofcontents
+
+\section{How to Read This Report}
+
+This report follows the numbering of the ``Priority Experimental Programme'' document exactly:
+Section~\ref{sec:setup} restates what is already trained and available; Sections~\ref{sec:exp2}--
+\ref{sec:exp4} present Experiments 2, 3, and 4 respectively, each covering both training regimes
+($T{=}50$ and $T{=}30$) side by side. Every result uses existing checkpoints only; no training was
+performed for this report.
+
+\section{Experimental Setup: What Is Already Available}
+\label{sec:setup}
+
+\begin{keypoint}
+Architecture: 5-layer, 4-channel, 2{,}420-parameter $p4$-equivariant \texttt{SpikingP4CNNSmall}
+(identical across configurations; see the earlier reduced-capacity reports for full layer-by-layer
+detail). Task: 4-class rotated-MNIST, digits $\{3,4,8,9\}$, trained upright only. Configurations used
+in this report: \None\ (mode=\texttt{none}), \Alternating\ (spikes at layers 2, 4), \FullSpiking\
+(all 5 layers spike) --- the three configurations the Priority Experimental Programme's Experiment 2
+recommends. Two independent training regimes, each with 3 seeds $\{0,1,2\}$: Regime A ($T{=}50$, 10
+epochs) and Regime B ($T{=}30$, 5 epochs). All analysis below uses a fixed, 32-image probe set
+(8 images per digit class, drawn once with seed 0 and reused identically for every model seed/config
+below) -- unlike the earlier representation-analysis report, which drew a different probe set per
+seed, this keeps probe-image variability from being conflated with genuine seed-to-seed model
+variability (Section~\ref{sec:exp2} returns to why this matters).
+\end{keypoint}
+
+\noindent \textbf{Recommended seed budget vs.\ what is used here.} The programme recommends 10
+(Experiment 2) and 5 (Experiment 3) seeds; only 3 training seeds exist for this reduced-capacity model
+(from the earlier reports), and per the current task no further training was performed. All
+seed-averaged numbers below are means/stds over $n=3$; this is explicitly noted wherever it matters.
+
+\section{Experiment 2: Does Spike Placement Matter?}
+\label{sec:exp2}
+
+\subsection{Setup}
+
+Following sec.\ 6.2 of the Priority Experimental Programme: fixing the $p4$ architecture, compare
+\None, \Alternating, and \FullSpiking. For each configuration/seed/regime, the following are computed
+directly from the trained checkpoint on the fixed 32-image probe set: upright accuracy, mean accuracy
+over the 24-angle sweep, rotation spread $D_s = \max_\theta A_s(\theta) - \min_\theta A_s(\theta)$,
+the direct group-angle equivariance error $E_{90} = \|f(R_{90^\circ}x) - f(x)\|/(\|f(x)\|+\epsilon)$
+(softmax-probability space, matching the direct-equivariance-error convention used throughout this
+project), and mean firing rate (spiking layers only, undefined for \None).
+
+\subsection{Accuracy(theta) and Rotation Spread}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment2/exp2_accuracy_by_angle.png}
+\caption{Regime A ($T{=}50$) --- accuracy($\theta$), mean $\pm$ std over 3 seeds, all three
+configurations. \texttt{plots\_small/experiment2/exp2\_accuracy\_by\_angle.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small_t30/experiment2/exp2_accuracy_by_angle.png}
+\caption{Regime B ($T{=}30$), same comparison.
+\texttt{plots\_small\_t30/experiment2/exp2\_accuracy\_by\_angle.png}}
+\end{figure}
+
+\FloatBarrier
+As in every prior accuracy comparison in this project, the three configurations' rotation-accuracy
+curves overlap heavily within seed-to-seed error bars, in both regimes --- accuracy alone does not
+distinguish spike placement once $p4$ is held fixed.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{plots_small/experiment2/exp2_rotation_spread.png}
+\caption{Regime A --- rotation-spread $D_s$ distribution across 3 seeds.
+\texttt{plots\_small/experiment2/exp2\_rotation\_spread.png}}
+\end{figure}
+
+\FloatBarrier
+\textbf{Note on $D_s$ quantization.} With a 32-image probe set, accuracy is quantized in steps of
+$1/32 \approx 3.1\%$; \FullSpiking's Regime-A $D_s$ is \emph{exactly} identical across all 3 seeds
+(0.28125 $= 9/32$), which is a coincidence of this coarse quantization at $n=3$ seeds, not evidence of
+seed-independence. $D_s$ should be read as indicative at this probe-set size, not precise.
+
+\subsection{Summary Table and the $E_{90}$ Finding}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Regime / Config} & Upright Acc.\ & Mean Acc.\ & Rotation Spread $D_s$ & $E_{90}$ & Firing Rate \\
+\midrule
+A: \None         & $100.0 \pm 0.0\%$ & $87.3 \pm 5.7\%$ & $0.281 \pm 0.136$ & $0.0050 \pm 0.0070$ & --- \\
+A: \Alternating  & $97.9 \pm 3.6\%$  & $85.9 \pm 3.4\%$ & $0.313 \pm 0.063$ & $0.0114 \pm 0.0086$ & $0.287 \pm 0.017$ \\
+A: \FullSpiking  & $95.8 \pm 4.8\%$  & $87.1 \pm 2.6\%$ & $0.281 \pm 0.000$ & $0.0259 \pm 0.0083$ & $0.285 \pm 0.010$ \\
+\midrule
+B: \None         & $97.9 \pm 1.8\%$  & $85.6 \pm 0.5\%$ & $0.302 \pm 0.018$ & $0.0163 \pm 0.0101$ & --- \\
+B: \Alternating  & $98.9 \pm 1.8\%$  & $88.8 \pm 3.9\%$ & $0.281 \pm 0.083$ & $0.0209 \pm 0.0156$ & $0.303 \pm 0.007$ \\
+B: \FullSpiking  & $97.9 \pm 3.6\%$  & $84.9 \pm 1.6\%$ & $0.333 \pm 0.095$ & $0.0515 \pm 0.0098$ & $0.289 \pm 0.000$ \\
+\bottomrule
+\end{tabular}
+\caption{Experiment 2 summary table, mean $\pm$ std over 3 seeds, both regimes. Upright/Mean acc.\ and
+$D_s$ as percentages/fractions of the 32-image probe set (see quantization note above).}
+\label{tab:exp2}
+\end{table}
+
+\noindent \textbf{The central finding of Experiment 2:} $E_{90}$ is monotonically ordered
+$\None < \Alternating < \FullSpiking$ in \emph{both} regimes, and this ordering is consistent with the
+means being separated by more than one standard deviation in most rows. This is a materially cleaner
+signal than the group-angle equivariance-error analysis in the earlier representation-level report,
+which (using a different, per-seed-varying probe set) found the effect noisy and seed-inconsistent.
+The methodological difference matters: holding the probe set fixed across seeds here isolates
+genuine model-to-model (seed-to-seed) variation in $E_{90}$ from probe-image sampling variation, which
+were confounded in the earlier analysis. Firing rate is essentially flat across \Alternating\ and
+\FullSpiking\ ($\sim 0.28$--$0.30$) and does not obviously track the $E_{90}$ ordering, suggesting the
+elevated group-angle error in \FullSpiking\ is about \emph{where} spikes occur (more cascaded
+thresholding stages) rather than \emph{how much} spiking occurs in aggregate.
+
+\section{Experiment 3: Where and When Does Rotation Sensitivity Remain?}
+\label{sec:exp3}
+
+\subsection{Setup}
+
+Following sec.\ 6.3 of the Priority Experimental Programme: for each layer $\ell$ and timestep $t$,
+\[
+D_{\ell,t}(\theta) \;=\; \mathbb{E}_x\!\left[\frac{\|h_{\ell,t}(R_\theta x) - h_{\ell,t}(x)\|_2}
+{\|h_{\ell,t}(x)\|_2 + \epsilon}\right],
+\]
+computed at $\theta = 45^\circ$ (no exact group guarantee) and $\theta = 90^\circ$ (exact $C_4$
+guarantee), for \None, \Alternating, \FullSpiking, all 3 seeds, both regimes, on the same fixed
+32-image probe set as Experiment 2.
+
+\subsection{An Unplanned Finding: Reference-Norm Collapse at the Deepest Layer}
+\label{sec:exp3anomaly}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment3/exp3_heatmap_none_seed0.png}
+\caption{\None, Regime A, seed 0 --- $D_{\ell,t}(45^\circ)$ heatmap, all layers (left) and layers 1--4
+only (right, own color scale). \texttt{plots\_small/experiment3/exp3\_heatmap\_none\_seed0.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment3/exp3_heatmap_alternating_seed0.png}
+\caption{\Alternating, Regime A, seed 0, same layout.
+\texttt{plots\_small/experiment3/exp3\_heatmap\_alternating\_seed0.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment3/exp3_heatmap_full_seed0.png}
+\caption{\FullSpiking, Regime A, seed 0, same layout.
+\texttt{plots\_small/experiment3/exp3\_heatmap\_full\_seed0.png}}
+\end{figure}
+
+\FloatBarrier
+\noindent Before any cross-configuration comparison could be made, an artifact needed to be
+understood: the deepest layer's $D_{\ell,t}(45^\circ)$ values span up to \emph{seven orders of
+magnitude} ($\sim 0.7$ to $\sim 3.4 \times 10^7$), completely dominating a linear color scale (the
+figures above already use a log scale and a two-panel layout -- layers 1--4 with their own color range
+-- for exactly this reason). The cause is the $+\epsilon$ denominator: when the reference
+representation $h_{\ell,t}(x)$ has near-zero norm at a given (layer, timestep) -- an all-or-mostly-zero
+activation vector at the network's narrowest layer (16 units: 4 channels $\times$ 4 orientations) for
+that particular single-timestep noisy sample -- the ratio explodes even for a tiny absolute numerator.
+
+\noindent \textbf{The frequency of this collapse is not simply ``spiking vs.\ analog.''} Layer 5 is
+\emph{analog} in both \None\ and \Alternating\ (only \FullSpiking\ spikes there), yet the three
+configurations show three visibly different collapse frequencies: rare in \None\ ($\sim$10 of 50
+timesteps), frequent in \Alternating\ ($\sim$30--35 of 50), and near-constant in \FullSpiking\
+($\sim$40+ of 50). Since \Alternating's layer 4 (immediately upstream of layer 5) spikes while
+\None's layer 4 does not, the most parsimonious reading is that sparsity introduced by an
+\emph{upstream} spiking layer propagates forward and makes a downstream \emph{analog} layer's
+pre-activation more likely to be all-negative (hence exactly zero after ReLU) at a given timestep --
+not that the layer's own activation type is what matters. This is offered as an observation with a
+plausible mechanism, not a fully verified one; it was not anticipated by the experiment design and
+would benefit from a targeted follow-up (Section~\ref{sec:limitations}).
+
+\subsection{Layers 1--4: Well-Behaved Structure}
+
+Restricting to layers 1--4 (right panels above), $D_{\ell,t}(45^\circ)$ stays within a narrow,
+sensible range ($\sim 0.65$--$1.35$) at every timestep, with layer 4 consistently elevated relative to
+layers 1--3 in every configuration examined. For \None\ specifically (no spiking anywhere), each
+layer's $D_{\ell,t}(45^\circ)$ is close to flat over time (expected: analog layers carry no state
+across timesteps, so each timestep's representation reflects only that timestep's independent
+Bernoulli input sample, processed identically regardless of $t$).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{plots_small/experiment3/exp3_lines_full_seed0.png}
+\caption{\FullSpiking, Regime A, seed 0 --- $D_{\ell,t}(45^\circ)$ (solid) vs.\ $D_{\ell,t}(90^\circ)$
+(dashed, layer 5 only), log scale. \texttt{plots\_small/experiment3/exp3\_lines\_full\_seed0.png}}
+\end{figure}
+
+\FloatBarrier
+Comparing $\theta=45^\circ$ against $\theta=90^\circ$ (dashed) at the layer most affected by the
+reference-norm collapse (layer 5): both angles are equally susceptible to the artifact described in
+Section~\ref{sec:exp3anomaly}, since the collapse is driven by the reference representation
+$h_{\ell,t}(x)$ alone (the same for both angles), not by which rotation is applied to produce the
+comparison representation. This means Experiment 3 cannot, in its current form, cleanly test the
+theoretical expectation that $90^\circ$ should be ``easier'' than $45^\circ$ at the layer where it
+would matter most; Section~\ref{sec:limitations} discusses a fix.
+
+\section{Experiment 4: Fourier Analysis of the Rotational Response}
+\label{sec:exp4}
+
+\subsection{Setup}
+
+Following sec.\ 6.6 of the Priority Experimental Programme: for \None, \Alternating, \FullSpiking, all
+3 seeds, both regimes, the classification margin $M(\theta) = z_y(R_\theta x) - \max_{c \neq y}
+z_c(R_\theta x)$ and accuracy $A(\theta)$ are evaluated at 1-degree resolution ($\theta = 0^\circ,
+1^\circ, \ldots, 359^\circ$, 360 angles) on the same fixed 32-image probe set, using the raw
+accumulated-spike-count logits (not softmax probabilities) for the margin, matching the programme's
+definition exactly. $M(\theta)$ is then Fourier-decomposed up to $k_{\max}=20$, and $E_{\text{noninv}}$,
+$E_{\text{forbidden}}$ computed per Eqs.\ in sec.\ 6.6.4.
+
+\subsection{Rotation Response and Fourier Spectrum}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment4/exp4_rotation_response_full.png}
+\caption{Regime A, \FullSpiking\ --- classification margin $M(\theta)$, all 3 seeds + mean, fine
+(1-degree) resolution. \texttt{plots\_small/experiment4/exp4\_rotation\_response\_full.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{plots_small/experiment4/exp4_fourier_spectrum_full.png}
+\caption{Regime A, \FullSpiking\ --- Fourier spectrum magnitude vs.\ $k$, all 3 seeds overlaid; red =
+allowed ($k$ a multiple of 4), gray = forbidden.
+\texttt{plots\_small/experiment4/exp4\_fourier\_spectrum\_full.png}}
+\end{figure}
+
+\FloatBarrier
+The spectrum is unambiguous: every forbidden frequency ($k \not\equiv 0 \pmod 4$) sits at a uniform
+noise floor ($\sqrt{a_k^2+b_k^2} \lesssim 0.03$) indistinguishable from zero, while the allowed
+frequencies show a clear, decaying spectrum dominated by $k=4$ ($\sim 2$--$3$), with smaller but
+clearly nonzero contributions at $k=8,12,16,20$. This is the clearest confirmation in this entire
+project of the $p4$ architecture's exact discrete-symmetry guarantee, directly in Fourier space rather
+than through an accuracy or representation-similarity proxy.
+
+\subsection{$E_{\text{noninv}}$ vs.\ $E_{\text{forbidden}}$: Architecture vs.\ Learned Solution}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Regime & Config & $a_0$ & $E_{\text{noninv}}$ & $E_{\text{forbidden}}$ & $|coef_{k=4}|$ & $|coef_{k=8}|$ \\
+\midrule
+A & \None         & $7.11 \pm 2.62$ & $0.278 \pm 0.094$ & $0.000092 \pm 0.000039$ & $4.07 \pm 0.74$ & $0.63 \pm 0.28$ \\
+A & \Alternating  & $7.80 \pm 1.88$ & $0.228 \pm 0.058$ & $0.000111 \pm 0.000055$ & $4.08 \pm 0.34$ & $0.36 \pm 0.34$ \\
+A & \FullSpiking  & $5.94 \pm 1.61$ & $0.192 \pm 0.086$ & $0.000118 \pm 0.000038$ & $2.70 \pm 0.51$ & $0.48 \pm 0.11$ \\
+\midrule
+B & \None         & $5.73 \pm 0.96$ & $0.252 \pm 0.095$ & $0.000156 \pm 0.000026$ & $3.31 \pm 1.16$ & $0.37 \pm 0.15$ \\
+B & \Alternating  & $6.27 \pm 0.99$ & $0.174 \pm 0.064$ & $0.000133 \pm 0.000049$ & $2.77 \pm 0.23$ & $0.22 \pm 0.14$ \\
+B & \FullSpiking  & $4.07 \pm 0.66$ & $0.201 \pm 0.050$ & $0.000284 \pm 0.000067$ & $2.01 \pm 0.44$ & $0.22 \pm 0.18$ \\
+\bottomrule
+\end{tabular}
+\caption{Experiment 4 summary, mean $\pm$ std over 3 seeds. Note $E_{\text{forbidden}}$ is 3--4 orders
+of magnitude smaller than $E_{\text{noninv}}$ throughout, in both regimes and all configurations.}
+\label{tab:exp4}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{plots_small/experiment4/exp4_enoninv_eforbidden.png}
+\caption{Regime A --- $E_{\text{noninv}}$ (left) vs.\ $E_{\text{forbidden}}$ (right), boxplot + individual
+seeds, all 3 configurations. \texttt{plots\_small/experiment4/exp4\_enoninv\_eforbidden.png}}
+\end{figure}
+
+\FloatBarrier
+\noindent \textbf{$E_{\text{forbidden}}$ is architectural, not learned:} all three configurations
+cluster tightly in the same narrow band ($\sim 6\times10^{-5}$ to $\sim 2.8\times10^{-4}$ across both
+regimes), with heavily overlapping seed distributions (Figure above, right panel) --- exactly the
+``essentially independent of the random seed'' prediction of sec.\ 6.6.4 of the Priority Experimental
+Programme.
+
+\noindent \textbf{$E_{\text{noninv}}$ is not architectural:} it varies more across configurations
+(Table~\ref{tab:exp4}, and left panel above), with a mild but not fully consistent trend toward lower
+non-invariant energy (more learned continuous rotational robustness) as more layers spike --- visible
+in both regimes for the $k{=}4$ coefficient specifically (\None\ $>$ \Alternating\ $>$ \FullSpiking\ in
+both A and B), though $E_{\text{noninv}}$ itself only shows this ordering cleanly in Regime A (Regime
+B's \FullSpiking\ mean is marginally above \Alternating's). Seed-to-seed standard deviations for
+$E_{\text{noninv}}$ and $|coef_{k=4}|$ are large relative to the between-configuration differences,
+consistent with sec.\ 6.6.8's expected outcome: two seeds of the \emph{same} configuration can produce
+visibly different amplitudes of the allowed non-constant modes, even though both satisfy the same
+$C_4$ constraint essentially exactly.
+
+\section{Synthesis}
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Experiment 2} confirms that accuracy alone cannot distinguish spike placement once the
+$p4$ architecture is fixed, but a properly-controlled (fixed probe set across seeds) direct
+equivariance-error measurement reveals a clean, reproducible ordering: more spiking layers correlates
+with higher direct output-level error specifically at the exact group-invariance angle, in both
+training regimes.
+\item \textbf{Experiment 3} was designed to localize \emph{where} rotation sensitivity remains once
+the architecture-level collapse (established in the earlier report) is accounted for, but instead
+surfaced a numerical fragility of the $D_{\ell,t}$ metric itself at this reduced capacity's narrowest
+layer -- itself an informative result about how sparsity from spiking propagates through the network,
+even into layers that are not themselves spiking.
+\item \textbf{Experiment 4} provides the cleanest confirmation yet, in this whole project, of the
+central theoretical claim: the $p4$ architecture's exact discrete symmetry is essentially seed- and
+configuration-independent ($E_{\text{forbidden}} \approx 0$ throughout), while the learned,
+continuous-rotation robustness (encoded in the amplitude of the allowed $k=4,8,12,\ldots$ harmonics)
+is not -- exactly the architecture-vs-optimization distinction the Priority Experimental Programme set
+out to establish.
+\end{enumerate}
+
+\section{Limitations and Next Steps}
+\label{sec:limitations}
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Experiment 1 was not run.} It requires building and training a new, non-equivariant SNN
+architecture matched in parameters/depth/etc., which is out of scope for this no-retraining pass.
+\item \textbf{Seed count is 3, not the recommended 10 (Exp.\ 2) or 5 (Exp.\ 3).} All seed-averaged
+statistics above should be read with this in mind; the $E_{90}$ ordering in Experiment 2, while
+consistent across both regimes, is still an $n=3$ result.
+\item \textbf{The 32-image probe set quantizes accuracy-derived quantities} ($D_s$ in particular) in
+steps of $1/32$; a larger probe set (or the full test set, computationally expensive at 360 angles --
+Section~\ref{sec:exp4}) would sharpen this.
+\item \textbf{Experiment 3's $D_{\ell,t}$ metric needs a denominator fix} before the $45^\circ$ vs.\
+$90^\circ$ comparison it was designed to enable can be trusted at the deepest layer: e.g.\ a floor on
+the reference norm before including a (layer, timestep) in the expectation, or reporting a robust
+(median-based) statistic instead of the raw mean.
+\item The upstream-sparsity-propagation explanation for Section~\ref{sec:exp3anomaly}'s finding is a
+plausible reading of the observed pattern, not a directly verified mechanism; a targeted follow-up
+(e.g.\ directly inspecting layer 4's pre-layer-5 output sparsity per configuration) would confirm it.
+\end{itemize}
+
+\end{document}

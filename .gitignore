@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+
+# Model checkpoints
+*.pt
+models/
+models_small/
+models_small_t30/
+
+# Generated plots and analysis outputs
+*.png
+plots/
+plots_small/
+plots_small_t30/
+results/
+results_small/
+results_small_t30/
+representation_small/
+
+# Dataset files
+digit-recognizer/
+train.csv
+test.csv
+
+# Logs and generated LaTeX build artifacts
+*.log
+*.aux
+*.out
+*.toc
+*.synctex.gz
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,1247 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+
+\graphicspath{{plots/}{./}}
+
+\newcommand{\Analog}{\textsc{Analog}}
+\newcommand{\Alternating}{\textsc{Alternating}}
+\newcommand{\FullSpiking}{\textsc{Full Spiking}}
+\newcommand{\HybridLate}{\textsc{Hybrid Late}}
+\newcommand{\HybridEarly}{\textsc{Hybrid Early}}
+\newcommand{\HybridMid}{\textsc{Hybrid Mid}}
+
+\newtcolorbox{keypoint}{%
+  colback=black!3, colframe=black!60, boxrule=0.6pt, arc=1pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt
+}
+
+\title{\Large Results Report:\\
+Representation-Level Analysis of Rotation Invariance\\
+in Spiking and Analog $p4$-Equivariant CNNs}
+\author{Sahil Singh\\
+CMI Summer Research Internship\\
+Supervisor: Prof. K.V. Subrahmanyam}
+\date{August 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents multi-seed (seeds 0, 1, 2) experimental results for four of the experiments
+proposed in the research plan ``Spike Dynamics for Learning Invariant Representations'': layer-wise
+emergence of invariance (Experiment 5.1), rotation sensitivity of individual neurons across layers
+(Experiment 5.3), rotation sensitivity through time (Experiment 5.4), temporal evolution of
+invariance via accuracy at truncated $T$ (Experiment 5.7), and direct equivariance error
+(Experiment 5.8). Results are reported for four spike-placement configurations sharing an identical
+$p4$-equivariant backbone: \Analog\ (no spiking layers), \Alternating\ (spikes at layers 2, 4, 6),
+\FullSpiking\ (all 7 layers spike), and \HybridLate\ (only layer 6 spikes). All notation follows the
+research plan exactly, restated in Section~\ref{sec:notation} for self-containedness. The central
+empirical finding is that the layer-wise and temporal signatures of rotation sensitivity are shaped
+substantially by the $p4$-equivariant architecture itself, independently of spike placement, while
+spike placement modulates \emph{how} and \emph{when} that sensitivity manifests, in ways that do not
+always follow the direction one would naively predict.
+\end{abstract}
+
+\tableofcontents
+
+\section{How to Read This Report}
+
+This report has three parts. Section~\ref{sec:notation} restates, without alteration, the notation
+defined in the research plan ``Spike Dynamics for Learning Invariant Representations'' --- every
+symbol used later is defined here first, in the same form KV sir's document uses it, so this report
+can be read on its own or side by side with the research plan. Section~\ref{sec:setup} restates the
+experimental setup. Sections~\ref{sec:finding1}--\ref{sec:finding4} present the actual multi-seed
+results, organized by which of the nine proposed experiments (Section 5 of the research plan) they
+answer. Figures could not be embedded in this pass; every figure has a labelled placeholder box
+giving its exact filename on the GPU server (\texttt{gpuserver.cmi.ac.in}), so the corresponding PNG
+can be inserted later without losing track of which plot goes where.
+
+\section{Notation for Internal Representations}
+\label{sec:notation}
+
+This section restates Section 4 of the research plan exactly, together with the additional
+quantities (direct equivariance error, truncated-$T$ accuracy) needed for Sections~\ref{sec:finding3}
+and~\ref{sec:finding4}. Every symbol that appears in a later plot or table is defined here before it
+is used.
+
+\subsection{Layers, Inputs, and Rotations}
+
+The network consists of layers
+\[
+x \to L_1 \to L_2 \to \cdots \to L_L, \qquad L = 7,
+\]
+where $x$ is a $28 \times 28$ input digit image (class 3, 4, 8, or 9), shown upright during training.
+Given a rotation angle $\theta$, $R_\theta x$ denotes the same image rotated by $\theta$. Layer index
+$\ell$ runs from 1 (nearest the input) to $L = 7$ (nearest the classifier); all layer-wise plots in
+this report place $\ell$ on the horizontal axis running shallow $\to$ deep.
+
+All four configurations examined here (Section~\ref{sec:setup}) share the identical $p4$-equivariant
+backbone; they differ only in which layers use spiking (LIF) neurons versus analog (ReLU)
+activations.
+
+\subsection{Layer Representations}
+
+For an input image $x$, $h_\ell(x)$ denotes the internal representation after layer $\ell$. In a
+conventional (analog) neural network, $h_\ell(x)$ is simply the vector of activations of all neurons
+in layer $\ell$.
+
+In a spiking neural network each neuron evolves over time, so there are several possible notions of
+representation. Throughout this work, following the research plan, we use the \emph{accumulated
+spike counts} over the simulation horizon $T$. Suppose layer $\ell$ contains $n_\ell$ neurons and
+neuron $i$ produces the spike train
+\[
+S_i(1), S_i(2), \ldots, S_i(T).
+\]
+Its accumulated spike count is
+\begin{equation}
+a_i(x) \;=\; \sum_{t=1}^{T} S_i(t). \label{eq:1}
+\end{equation}
+The layer representation is therefore
+\[
+h_\ell(x) \;=\; \big(a_1(x), a_2(x), \ldots, a_{n_\ell}(x)\big),
+\]
+the vector of spike counts of all neurons in layer $\ell$. For analog layers, $h_\ell(x)$ is the
+ordinary activation vector; these are treated as a degenerate spiking layer with $T = 1$ so that the
+same notation applies uniformly across configurations.
+
+\paragraph{Why this matters.} The central question of the whole project is whether $h_\ell(x)$
+becomes increasingly invariant to rotation ($h_\ell(x) \approx h_\ell(R_\theta x)$) as $\ell$
+increases. Everything in Section~\ref{sec:finding1} is built directly on this comparison.
+
+\subsection{Neuron Responses}
+
+For an individual neuron $i$, $a_i(x)$ denotes its response to input $x$. Unlike a conventional
+neuron, an SNN neuron produces an entire time series consisting of membrane potentials
+$U_i(1), \ldots, U_i(T)$ and spike outputs $S_i(1), \ldots, S_i(T)$. Several choices are possible for
+defining the neuron's scalar activation (accumulated spike count, average firing rate, final
+membrane potential, average membrane potential); since classification throughout this work is based
+on accumulated spike counts, we use $a_i(x) = \sum_{t=1}^{T} S_i(t)$ (Eq.~\ref{eq:1}) uniformly, as
+specified in the research plan.
+
+\subsection{Representation Similarity}
+\label{sec:repsim}
+
+To study where invariant representations emerge, we compare the layer representations of an image
+and its rotated version, $h_\ell(x)$ versus $h_\ell(R_\theta x)$, using three similarity measures.
+High similarity indicates that layer $\ell$ has learned a representation that is insensitive to
+rotation.
+
+\paragraph{Cosine similarity.} Treats $h_\ell(x)$ and $h_\ell(R_\theta x)$ as vectors and measures the
+cosine of the angle between them (1 = identical direction, 0 = unrelated, $-1$ = opposite). This is
+the strictest of the three measures: it requires exact neuron-by-neuron agreement in both direction
+and relative magnitude, with no tolerance for the network re-using its neurons differently (e.g.\
+permuting which unit encodes which feature) while preserving the same information content.
+
+\paragraph{Centered Kernel Alignment (CKA).} Compares the Gram matrix of pairwise similarities
+between a batch of images' representations under $h_\ell(x)$ against the Gram matrix under
+$h_\ell(R_\theta x)$. Because CKA is invariant to orthogonal transformations and isotropic scaling of
+the neuron basis, it tolerates the network computing the same information in a different internal
+coordinate system, and is standard in the representation-similarity literature for this reason.
+\emph{Implementation note:} for layer 1, the naive neuron-space Gram matrix has dimension
+$\sim\!27{,}040 \times 27{,}040$ and is infeasible to materialize; we use the mathematically
+equivalent batch-side Gram matrix formulation instead, verified to agree exactly with the naive form
+on small test cases.
+
+\paragraph{Singular Vector Canonical Correlation Analysis (SVCCA).} Projects each representation onto
+its top principal directions, then finds the best linear alignment between the two reduced spaces and
+reports the resulting correlation. SVCCA tolerates \emph{any} invertible linear transform relating
+the two representations, making it the most permissive of the three measures. \emph{Caution:} SVCCA
+is known to report spuriously high similarity when the batch size is too small relative to the neuron
+count. A minimum batch-to-neuron ratio of $10\times$ is enforced throughout; even so, independent
+(genuinely dissimilar) data was empirically found to produce a baseline SVCCA score of roughly
+0.2--0.4, not 0. SVCCA values should therefore be read \emph{relatively} --- larger is more similar
+--- never as an absolute 0-to-1 invariance scale.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}p{2.6cm}p{3.6cm}p{4.2cm}p{2cm}@{}}
+\toprule
+\textbf{Metric} & \textbf{Tolerates} & \textbf{Strict about} & \textbf{Absolute scale?} \\
+\midrule
+Cosine similarity & Nothing --- exact match required & Neuron identity, magnitude, direction & Yes \\[4pt]
+CKA & Rotation/rescaling of neuron basis & Pairwise similarity structure & Mostly yes \\[4pt]
+SVCCA & Any invertible linear transform & Top principal (signal) directions & No --- compare relatively \\
+\bottomrule
+\end{tabular}
+\caption{The three representation-similarity measures used in Experiment 5.1.}
+\label{tab:metrics}
+\end{table}
+
+(Section~\ref{sec:finding2}) identifies where invariant representations are formed, at the
+resolution of individual neurons rather than whole layers.
+
+\subsection{Rotation Sensitivity of Individual Neurons}
+\label{sec:Ri}
+
+Following the research plan exactly, for neuron $i$ we define the rotation sensitivity
+\begin{equation}
+\mathcal{R}_i \;=\; \mathrm{Var}_\theta\big(a_i(R_\theta x)\big), \label{eq:2}
+\end{equation}
+where the variance is computed over the collection of 24 rotation angles $\theta$. A neuron with
+$\mathcal{R}_i \approx 0$ responds similarly to all rotations and is therefore approximately
+rotation-invariant; a large $\mathcal{R}_i$ indicates the neuron is strongly orientation-selective.
+Studying the distribution of $\mathcal{R}_i$ across layers (Section~\ref{sec:finding2}) identifies
+where invariant representations are formed, at the resolution of individual neurons rather than whole
+layers.
+
+\subsection{Temporal Representations and Rotation Sensitivity Through Time}
+
+Instead of collapsing spike trains into accumulated spike counts, we may consider the instantaneous
+representation
+\[
+h_\ell(t, x) \;=\; \big(S_1(t), S_2(t), \ldots, S_{n_\ell}(t)\big),
+\]
+recording the spike outputs of every neuron in layer $\ell$ at timestep $t$ specifically. Comparing
+$h_\ell(t, x)$ with $h_\ell(t, R_\theta x)$ for successive $t$ investigates whether temporal
+integration progressively builds rotation-invariant representations. Correspondingly,
+$\mathcal{R}_i(t)$ denotes the rotation sensitivity of Eq.~\ref{eq:2} computed using only the spike
+output at timestep $t$ (or, in the aggregate plots of Section~\ref{sec:54}, the median over neurons
+of this quantity per layer, plotted against $t$).
+
+\subsection{Direct Equivariance Error}
+
+Experiment 5.8 of the research plan measures equivariance directly at the network output rather than
+through an internal-representation proxy:
+\[
+\big\| f(Rx) - \rho(R) f(x) \big\|.
+\]
+For the classification setting used throughout this work, $f$ is the network's output
+class-probability vector and the group action on the output, $\rho(R)$, is trivial (rotating the
+input should not permute the class labels), so this reduces to the relative error
+\begin{equation}
+\text{Equivariance error}(\theta) \;=\; \frac{\big\| f(R_\theta x) - f(x) \big\|}{\big\| f(x) \big\|}. \label{eq:3}
+\end{equation}
+A perfectly rotation-invariant classifier has equivariance error 0 at every $\theta$. The
+$p4$-equivariant architecture used here \emph{guarantees} error exactly 0 at the four group angles
+$\theta \in \{0^\circ, 90^\circ, 180^\circ, 270^\circ\}$ by construction (Section~\ref{sec:arch}), and
+makes no guarantee at any other angle, since those rotations are not elements of the $p4$ group the
+convolution kernels are built from. Experiment 5.8 tests precisely whether error stays low everywhere
+(full continuous invariance --- not claimed by this architecture) or dips to 0 only at the four group
+angles while rising in between (the theoretically expected pattern).
+
+\subsection{Truncated-$T$ Accuracy}
+
+Experiment 5.7 of the research plan asks whether invariance emerges progressively as spikes
+accumulate, by evaluating representations after $T = 1, 5, 10, 20, 50, 100$ timesteps. In this report
+we use $T' \in \{1, 5, 10, 20, 50\}$: a single model is trained once using the full $T = 50$
+timesteps, and at evaluation time its own recorded spike train is truncated to the first $T'$
+timesteps to decode a classification decision, without retraining. This measures how quickly the
+network's rotation-robust accuracy structure becomes available as a function of accumulated spiking
+time.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\begin{keypoint}
+Every result below is computed on the 4-class rotated-MNIST task (digits 3, 4, 8, 9), trained on
+upright ($\theta = 0^\circ$) images only and evaluated at $\theta \in \{0^\circ, 15^\circ, \ldots,
+345^\circ\}$ (24 angles), averaged or shown individually over three independent training seeds
+$\{0, 1, 2\}$, for each of four spike-placement configurations described in Section~\ref{sec:setup}.
+\end{keypoint}
+
+\subsection{Architecture: $p4$-Equivariant Backbone}
+\label{sec:arch}
+
+All four configurations share an identical 7-layer $p4$-equivariant CNN backbone (six valid
+$3 \times 3$ $p4$-convolutions and one valid $4 \times 4$ $p4$-convolution, 10 channels, one max-pool
+after layer 2, a group-pooling step collapsing the 4 orientation channels via max, and a final linear
+classifier), matching Cohen \& Welling's rotated-MNIST P4CNN specification. The group $p4$ consists
+of translations composed with $90^\circ$ rotations; the convolution kernels are constructed so that
+rotating the input by a multiple of $90^\circ$ produces an output that is provably (not
+approximately) rotated/permuted correspondingly. This gives exact built-in invariance at
+$\theta \in \{0^\circ, 90^\circ, 180^\circ, 270^\circ\}$ by mathematical construction and no
+guarantee elsewhere --- which is precisely the reason the evaluation sweep uses all 24 angles rather
+than only the four group angles: the interesting question is what happens \emph{between} the
+guaranteed points.
+
+\paragraph{Observation 1 (BatchNorm breaks equivariance).} \textit{Standard BatchNorm assigns each of
+the 4 orientation channels independent running statistics, which breaks the architecture's
+equivariance guarantee once trained upright-only (verified: an untrained model is equivariant to
+$\sim 10^{-6}$; after training with standard BatchNorm, equivariance error rises to $0.1$--$0.2$). A
+custom \texttt{P4BatchNorm2d}, sharing statistics and affine parameters across the 4 orientation
+channels, restores equivariance to $\sim 10^{-6}$ even after training. All results in this report use
+\texttt{P4BatchNorm2d} throughout.}
+
+\subsection{Configurations}
+
+All four configurations have identical architecture and parameter count (24,744 parameters); they
+differ only in which layers use spiking LIF neurons (via \texttt{snntorch}, fast-sigmoid surrogate
+gradient) versus analog ReLU activations.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Configuration} & \textbf{Spiking layers} & \textbf{Description} \\
+\midrule
+\Analog & none & Zero-spiking control / ceiling reference \\
+\Alternating & 2, 4, 6 & Spiking interleaved with analog throughout depth \\
+\FullSpiking & all 1--7 & Maximal spiking \\
+\HybridLate & 6 only & Spiking confined to near the output \\
+\bottomrule
+\end{tabular}
+\caption{The four spike-placement configurations analyzed in this report. \HybridEarly\ (layers
+1--2) and \HybridMid\ (layers 3--5), both implemented, have not yet been trained under the corrected
+setup and are not covered here.}
+\label{tab:configs}
+\end{table}
+
+\subsection{Training and Evaluation}
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Input encoding.} Poisson rate coding over $T = 50$ timesteps (direct/constant-current
+encoding produced a degenerate fixed-rate oscillation at low $T$ and was abandoned).
+\item \textbf{Task.} 4-class rotated-MNIST, digits $\{3, 4, 8, 9\}$ --- chosen because none is
+rotationally self-symmetric under $90^\circ/180^\circ$.
+\item \textbf{Training.} Upright ($0^\circ$) images only, Adam, learning rate $10^{-3}$, batch size
+64, 20 epochs, best checkpoint selected by $0^\circ$ test accuracy.
+\item \textbf{Evaluation.} Full 24-angle sweep, $\theta \in \{0^\circ, 15^\circ, \ldots, 345^\circ\}$,
+held-out test split.
+\item \textbf{Seeds.} Three independent training runs per configuration, seeds $\{0, 1, 2\}$.
+\item \textbf{Hardware.} \texttt{gpuserver.cmi.ac.in}, $2\times$ RTX 2080 Ti.
+\end{itemize}
+
+\subsection{Relation to the Original Internship Report}
+
+The original report's compute-constrained single-seed runs ($T = 30$, 5 epochs, CPU only) reported
+two dramatic mechanistic findings: \FullSpiking\ flat at 51--57\% accuracy across all angles, and
+\HybridLate\ collapsing to exact chance (25\%) at non-group angles. Under the corrected setup above,
+neither replicates: \FullSpiking\ reaches $\sim 99\%$ upright and a mean of $\sim 94\%$ across all
+angles; \HybridLate's worst-case accuracy across all seeds and angles is 80.9\%. Three candidate
+explanations (the \texttt{P4BatchNorm2d} fix, the longer schedule, the higher $T$) have been
+identified but not yet isolated by controlled ablation (Section~\ref{sec:limitations}). The
+representation-level experiments in Sections~\ref{sec:finding1}--\ref{sec:finding4} are a separate,
+complementary investigation of the same underlying question posed by the research plan (Section 1):
+even where accuracy differences between configurations have mostly disappeared, does the
+\emph{internal representation} still reveal a meaningful role for spike dynamics?
+
+\section{Baseline: Multi-Seed Accuracy Comparison}
+\label{sec:baseline}
+
+Before the representation-level results, we restate the accuracy picture with all three seeds and
+error bars, since this is the backdrop against which Sections~\ref{sec:finding1}--\ref{sec:finding4}
+should be read.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{n4_comparison_final.png}
+\caption{Config comparison, 4-class rotation-angle sweep. Mean $\pm$ std over $n = 3$ seeds for each
+of \Analog, \Alternating, \FullSpiking, \HybridLate. Chance level (25\%) shown for reference.
+\texttt{n4\_comparison\_final.png}}
+\end{figure}
+
+With all three seeds and error bars, the four configurations' rotation-accuracy curves sit within a
+few percentage points of one another at every angle, with substantial error-bar overlap at the
+hardest angles ($45^\circ, 135^\circ, 225^\circ, 315^\circ$). This confirms that the original
+report's two dramatic accuracy-level findings (Section~\ref{sec:setup}) do not replicate under the
+corrected setup, and that with proper multi-seed averaging the remaining accuracy differences
+between configurations are small relative to seed-to-seed variation.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{n4_rotation_curve.png}\\[6pt]
+\includegraphics[width=0.85\textwidth]{n4_rotation_curve_training_curves.png}
+\caption{\Analog-only rotation curve, mean $\pm$ std over 3 seeds ($\{0, 1, 2\}$), alongside per-seed
+training-loss and upright-accuracy curves.
+\texttt{n4\_rotation\_curve.png} and \texttt{n4\_rotation\_curve\_training\_curves.png}}
+\end{figure}
+
+\FloatBarrier
+
+\section{Finding 1 --- Layer-wise Emergence of Invariance (Experiment 5.1)}
+\label{sec:finding1}
+
+\subsection{Setup}
+
+Following Section 5.1 of the research plan exactly: for an image $x$ and its rotated version
+$R_\theta x$, we compute $h_\ell(x)$ and $h_\ell(R_\theta x)$ at every hidden layer
+$\ell = 1, \ldots, 7$, and measure similarity using cosine similarity, CKA, and SVCCA
+(Section~\ref{sec:repsim}), plotted against layer depth for each of the 24 test angles.
+
+\subsection{Result: A Common Depth-Wise Collapse in Every Configuration}
+
+Every configuration --- including \Analog, the zero-spiking control --- shows the same qualitative
+shape: CKA similarity to the upright representation stays at or above roughly 0.97--0.99 through
+layers 1--5, and only then drops sharply in layers 6--7, to roughly 0.70--0.85 at the hardest angles
+(typically the non-group angles nearest a group angle: $15^\circ, 30^\circ, 45^\circ, 60^\circ$,
+etc.). The last two layers are where representational invariance to rotation is lost; the first five
+preserve it almost perfectly, in every configuration tested.
+
+\paragraph{Aggregate CKA summary (one line per angle, per configuration)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_layerwise_cka.png}
+\caption{\Analog\ --- CKA similarity to upright vs.\ layer, one line per test angle.
+\texttt{analog\_layerwise\_cka.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_layerwise_cka.png}
+\caption{\Alternating\ --- CKA similarity to upright vs.\ layer, one line per test angle.
+\texttt{alternating\_layerwise\_cka.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_layerwise_cka.png}
+\caption{\FullSpiking\ --- CKA similarity to upright vs.\ layer, one line per test angle.
+\texttt{full\_layerwise\_cka.png}}
+\end{figure}
+
+\noindent\HybridLate\ --- CKA similarity to upright vs.\ layer, one line per test angle.
+\texttt{hybrid\_late\_layerwise\_cka.png} was not generated as a standalone aggregate for this pass;
+see the per-seed Section~5.1 plots below for \HybridLate\ instead.
+
+\FloatBarrier
+
+\subsection{Per-Seed, All-Three-Metrics Detail}
+
+The figures below show, for each configuration and seed, all three similarity measures side by side
+with all 24 angles overlaid, confirming the layer-6/7 collapse is not an artifact of one metric and
+is stable across seeds.
+
+\paragraph{Analog}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed0/analog_seed0_5.1_layerwise_similarity.png}
+\caption{\Analog, seed 0 --- cosine / CKA / SVCCA vs.\ layer, all 24 angles.
+\texttt{analog\_seed0/analog\_seed0\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed1/analog_seed1_5.1_layerwise_similarity.png}
+\caption{\Analog, seed 1.
+\texttt{analog\_seed1/analog\_seed1\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed2/analog_seed2_5.1_layerwise_similarity.png}
+\caption{\Analog, seed 2.
+\texttt{analog\_seed2/analog\_seed2\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\FloatBarrier
+\paragraph{Alternating (spikes at layers 2, 4, 6)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed0/alternating_seed0_5.1_layerwise_similarity.png}
+\caption{\Alternating, seed 0.
+\texttt{alternating\_seed0/alternating\_seed0\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed1/alternating_seed1_5.1_layerwise_similarity.png}
+\caption{\Alternating, seed 1.
+\texttt{alternating\_seed1/alternating\_seed1\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed2/alternating_seed2_5.1_layerwise_similarity.png}
+\caption{\Alternating, seed 2.
+\texttt{alternating\_seed2/alternating\_seed2\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\FloatBarrier
+\paragraph{Full Spiking (all 7 layers spike)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed0/full_seed0_5.1_layerwise_similarity.png}
+\caption{\FullSpiking, seed 0.
+\texttt{full\_seed0/full\_seed0\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed1/full_seed1_5.1_layerwise_similarity.png}
+\caption{\FullSpiking, seed 1.
+\texttt{full\_seed1/full\_seed1\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed2/full_seed2_5.1_layerwise_similarity.png}
+\caption{\FullSpiking, seed 2.
+\texttt{full\_seed2/full\_seed2\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\FloatBarrier
+\paragraph{Hybrid Late (layer 6 only spikes)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed0/hybrid_late_seed0_5.1_layerwise_similarity.png}
+\caption{\HybridLate, seed 0.
+\texttt{hybrid\_late\_seed0/hybrid\_late\_seed0\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed1/hybrid_late_seed1_5.1_layerwise_similarity.png}
+\caption{\HybridLate, seed 1.
+\texttt{hybrid\_late\_seed1/hybrid\_late\_seed1\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed2/hybrid_late_seed2_5.1_layerwise_similarity.png}
+\caption{\HybridLate, seed 2.
+\texttt{hybrid\_late\_seed2/hybrid\_late\_seed2\_5.1\_layerwise\_similarity.png}}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Reading the Three Metrics Together}
+
+The three panels within each figure disagree with each other informatively rather than redundantly.
+Cosine similarity is much lower and noisier throughout (typically 0.3--0.6 even at shallow layers,
+falling to 0.2--0.3 by layer 7), reflecting its strictness: it demands exact neuron-by-neuron
+agreement and penalizes even a meaningless internal reshuffling of which channel encodes which
+feature, even when the information content is unchanged. CKA and SVCCA both stay near 1.0 through
+layer 5 and only then diverge slightly at layers 6--7, with SVCCA sitting a little above CKA at the
+deepest layers in several seeds --- consistent with SVCCA's more permissive tolerance for any linear
+transform (Section~\ref{sec:repsim}) crediting structure that CKA's stricter pairwise-similarity
+criterion does not. The three metrics agreeing on \emph{where} the drop happens while disagreeing on
+\emph{how severe} it looks is itself informative: it indicates a real, robust change in what the
+layer computes, not an artifact of one particular similarity definition.
+
+\subsection{Interpretation}
+
+\begin{enumerate}[leftmargin=1.8em]
+\item The representational collapse at layers 6--7 occurs in \Analog\ too, with zero spiking neurons
+anywhere in the network. Whatever causes deep layers to become rotation-sensitive is a property of
+the $p4$-equivariant architecture itself --- most plausibly the group-pooling and final
+linear-classifier stages, the only components not built from strictly equivariant convolutions ---
+not something introduced by spiking dynamics.
+\item Spike placement modulates the depth pattern's shape somewhat but not its existence or
+location. \Alternating\ and \FullSpiking\ show a slightly earlier onset of divergence (visible
+already around layer 5) relative to \Analog\ and \HybridLate, but all four configurations land in
+the same 0.70--0.85 CKA range by layer 7 at the hardest angles.
+\item This complicates the research plan's central hypothesis (Section 6 of the research plan,
+restated in Section~\ref{sec:synthesis} of this report) in an interesting way. The hypothesis space
+as originally framed treats spike dynamics as the primary lever for building (or failing to build)
+invariant representations. Finding 1 instead shows that the \emph{architecture} sets both the ceiling
+and the location of where invariance is lost, and spike dynamics act as a secondary modulator on top
+of that. This motivates reframing the guiding question from ``do spikes build invariance?'' to
+``given that architecture alone determines where invariance breaks down, what does spike placement
+change about how that breakdown proceeds?'' --- precisely what Findings 2 and 3 investigate.
+\end{enumerate}
+
+\section{Finding 2 --- Rotation Sensitivity of Individual Neurons, by Layer and by Time (Experiments 5.3, 5.4)}
+\label{sec:finding2}
+
+Finding 1 examined whole-layer representations. This section zooms into individual neurons using
+$\mathcal{R}_i$ (Eq.~\ref{eq:2}, Section~\ref{sec:Ri}), asking two complementary questions: which
+layers contain the most rotation-sensitive individual neurons (Experiment 5.3), and does
+$\mathcal{R}_i(t)$ decrease as more spiking timesteps are accumulated, as the research plan's
+temporal-averaging hypothesis (Section 9.4 of the research plan) would predict (Experiment 5.4)?
+
+\subsection{5.3 --- Distribution of $\mathcal{R}_i$ Across Layers}
+
+Each boxplot shows, for one configuration, the distribution of $\mathcal{R}_i$ across all neurons in
+each of the 7 layers (log scale, since $\mathcal{R}_i$ spans several orders of magnitude). The orange
+line is the median; the box spans the interquartile range; whiskers extend to the typical range with
+outliers beyond.
+
+\paragraph{Aggregate boxplots (seeds pooled per configuration)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_rotation_sensitivity.png}
+\caption{\Analog\ --- $\mathcal{R}_i$ distribution by layer.
+\texttt{analog\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_rotation_sensitivity.png}
+\caption{\Alternating\ --- $\mathcal{R}_i$ distribution by layer.
+\texttt{alternating\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_rotation_sensitivity.png}
+\caption{\FullSpiking\ --- $\mathcal{R}_i$ distribution by layer.
+\texttt{full\_rotation\_sensitivity.png}}
+\end{figure}
+
+\noindent\HybridLate\ --- $\mathcal{R}_i$ distribution by layer.
+\texttt{hybrid\_late\_rotation\_sensitivity.png} was not generated as a standalone aggregate for this
+pass; see the per-seed plots below for \HybridLate\ instead.
+
+\FloatBarrier
+
+\paragraph{Per-seed boxplots}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed0/analog_seed0_5.3_rotation_sensitivity.png}
+\caption{\Analog, seed 0.
+\texttt{analog\_seed0/analog\_seed0\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed1/analog_seed1_5.3_rotation_sensitivity.png}
+\caption{\Analog, seed 1.
+\texttt{analog\_seed1/analog\_seed1\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed2/analog_seed2_5.3_rotation_sensitivity.png}
+\caption{\Analog, seed 2.
+\texttt{analog\_seed2/analog\_seed2\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed0/alternating_seed0_5.3_rotation_sensitivity.png}
+\caption{\Alternating, seed 0.
+\texttt{alternating\_seed0/alternating\_seed0\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed1/alternating_seed1_5.3_rotation_sensitivity.png}
+\caption{\Alternating, seed 1.
+\texttt{alternating\_seed1/alternating\_seed1\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed2/alternating_seed2_5.3_rotation_sensitivity.png}
+\caption{\Alternating, seed 2.
+\texttt{alternating\_seed2/alternating\_seed2\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed0/full_seed0_5.3_rotation_sensitivity.png}
+\caption{\FullSpiking, seed 0.
+\texttt{full\_seed0/full\_seed0\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed1/full_seed1_5.3_rotation_sensitivity.png}
+\caption{\FullSpiking, seed 1.
+\texttt{full\_seed1/full\_seed1\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed2/full_seed2_5.3_rotation_sensitivity.png}
+\caption{\FullSpiking, seed 2.
+\texttt{full\_seed2/full\_seed2\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed0/hybrid_late_seed0_5.3_rotation_sensitivity.png}
+\caption{\HybridLate, seed 0.
+\texttt{hybrid\_late\_seed0/hybrid\_late\_seed0\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed1/hybrid_late_seed1_5.3_rotation_sensitivity.png}
+\caption{\HybridLate, seed 1.
+\texttt{hybrid\_late\_seed1/hybrid\_late\_seed1\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed2/hybrid_late_seed2_5.3_rotation_sensitivity.png}
+\caption{\HybridLate, seed 2.
+\texttt{hybrid\_late\_seed2/hybrid\_late\_seed2\_5.3\_rotation\_sensitivity.png}}
+\end{figure}
+
+\FloatBarrier
+
+\paragraph{What differs between configurations}
+
+All four configurations place layer 7 at or near the top of the $\mathcal{R}_i$ ranking, consistent
+with Finding 1's identification of the last layers as where invariance breaks down. The shape of the
+climb to layer 7 differs meaningfully:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Alternating:} a sharp, order-of-magnitude jump only at layer 7 --- median
+$\mathcal{R}_i \sim 10$--100 for layers 1--6, jumping to $\sim 400$--800 at layer 7.
+\item \textbf{Full Spiking:} a gradual, full-depth climb --- median $\mathcal{R}_i$ increases roughly
+monotonically from $\sim 10$ (layer 1) to $\sim 90$--100 (layer 7), with no single sharp jump.
+\item \textbf{Hybrid Late:} nearly flat across all seven layers --- median $\mathcal{R}_i$ sits in a
+comparatively narrow band ($\sim 10$--80) at every depth, including layer 7.
+\item \textbf{Analog:} a gradual full-depth climb similar in shape to \FullSpiking, but at a
+dramatically smaller absolute scale ($\sim 0.01$--0.05 throughout, roughly $1000\times$ smaller than
+the spiking configurations at comparable layers).
+\end{itemize}
+
+\paragraph{Observation 2 ($\mathcal{R}_i$ scale is not comparable across activation types).}
+\textit{Because $\mathcal{R}_i$'s absolute scale depends on whether the underlying activation is a
+continuous ReLU output or a spike count, the fair cross-configuration comparison is the \emph{shape}
+of the $\mathcal{R}_i$-vs-layer curve (sharp late jump vs.\ gradual climb vs.\ flat), not the raw
+magnitude. Within a single configuration, comparisons across layers or across seeds are on safe
+footing.}
+
+\subsection{5.4 --- Rotation Sensitivity Through Time}
+\label{sec:54}
+
+This experiment is the direct empirical test of the research plan's Section 9.4 hypothesis: does
+temporal averaging progressively stabilize the representation, so that
+$\mathrm{Var}(\bar h_T) = O(T^{-1})$ and $\mathcal{R}_i(t)$ decays toward 0 as $t$ grows? The plots
+below show median $\mathcal{R}_i(t)$ per layer against timestep $t \in \{1, \ldots, 50\}$, log scale
+on the vertical axis.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed0/alternating_seed0_5.4_rotation_sensitivity_through_time.png}
+\caption{\Alternating, seed 0 --- $\mathcal{R}_i(t)$ vs.\ timestep, all 7 layers.
+\texttt{alternating\_seed0/alternating\_seed0\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed1/alternating_seed1_5.4_rotation_sensitivity_through_time.png}
+\caption{\Alternating, seed 1.
+\texttt{alternating\_seed1/alternating\_seed1\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed2/alternating_seed2_5.4_rotation_sensitivity_through_time.png}
+\caption{\Alternating, seed 2.
+\texttt{alternating\_seed2/alternating\_seed2\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed0/full_seed0_5.4_rotation_sensitivity_through_time.png}
+\caption{\FullSpiking, seed 0.
+\texttt{full\_seed0/full\_seed0\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed1/full_seed1_5.4_rotation_sensitivity_through_time.png}
+\caption{\FullSpiking, seed 1.
+\texttt{full\_seed1/full\_seed1\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed2/full_seed2_5.4_rotation_sensitivity_through_time.png}
+\caption{\FullSpiking, seed 2.
+\texttt{full\_seed2/full\_seed2\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed0/hybrid_late_seed0_5.4_rotation_sensitivity_through_time.png}
+\caption{\HybridLate, seed 0.
+\texttt{hybrid\_late\_seed0/hybrid\_late\_seed0\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed1/hybrid_late_seed1_5.4_rotation_sensitivity_through_time.png}
+\caption{\HybridLate, seed 1.
+\texttt{hybrid\_late\_seed1/hybrid\_late\_seed1\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed2/hybrid_late_seed2_5.4_rotation_sensitivity_through_time.png}
+\caption{\HybridLate, seed 2.
+\texttt{hybrid\_late\_seed2/hybrid\_late\_seed2\_5.4\_rotation\_sensitivity\_through\_time.png}}
+\end{figure}
+
+\FloatBarrier
+
+\paragraph{Observation 3 (Rise-then-plateau, not decay).} \textit{In every configuration and every
+seed, every layer's $\mathcal{R}_i(t)$ curve rises quickly over the first 2--5 timesteps (as the
+membrane potential accumulates its first spikes and begins producing non-degenerate output), then
+plateaus for the remaining $\sim 45$ timesteps with only small step-to-step jitter and no visible
+downward trend. Layer 7 plateaus visibly higher than the other layers in \Alternating\ and
+\FullSpiking\ (consistent with Section 5.1 of this report); in \HybridLate\ the plateau levels across
+layers are closer together, consistent with that configuration's flatter layer-wise sensitivity
+profile.}
+
+\Analog\ has no meaningful 5.4 plot: with $T = 1$ there is no timestep axis to show evolving over
+time.
+
+This directly contradicts the ``temporal averaging reduces sensitivity'' hypothesis of
+research-plan Section 9.4, as measured on these trained checkpoints: each layer's rotation
+sensitivity is set almost immediately, within the first handful of timesteps, and then stays fixed
+for the remainder of the simulation. Temporal integration in this architecture does not act as a
+noise-averaging invariance-builder over the timescales examined here --- the theoretical contraction
+property $d_{t+1} \leq \beta d_t$ proposed in research-plan Section 9.5 is not observed empirically
+for $\mathcal{R}_i(t)$ once the initial transient has passed.
+
+\section{Finding 3 --- Temporal Evolution of Invariance via Truncated-$T$ Accuracy (Experiment 5.7)}
+\label{sec:finding3}
+
+Section~\ref{sec:finding2} examined representation-level sensitivity through time. This section asks
+the same question at the level that ultimately matters for a user of the classifier: accuracy. Using
+the truncated-$T$ evaluation of Section 2.8, we decode a classification decision from the same
+trained model using only its first $T' \in \{1, 5, 10, 20, 50\}$ timesteps, and plot accuracy against
+all 24 test angles for each $T'$. This produces, for each $T'$, the familiar W-shaped
+rotation-accuracy curve (peaks at the group angles, troughs between them), and lets us observe how
+quickly that shape ``switches on'' as more timesteps become available --- directly answering the
+question posed in research-plan Section 5.7: does invariance emerge progressively as spikes
+accumulate?
+
+\subsection{Full Spiking: Requires Real Accumulation Time}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed0/full_seed0_5.7_temporal_evolution.png}
+\caption{\FullSpiking, seed 0 --- accuracy vs.\ angle at $T' = 1, 5, 10, 20, 50$.
+\texttt{full\_seed0/full\_seed0\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed1/full_seed1_5.7_temporal_evolution.png}
+\caption{\FullSpiking, seed 1.
+\texttt{full\_seed1/full\_seed1\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed2/full_seed2_5.7_temporal_evolution.png}
+\caption{\FullSpiking, seed 2.
+\texttt{full\_seed2/full\_seed2\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\FloatBarrier
+
+In all three seeds, the $T' = 1$ curve is flat at approximately chance level ($\sim 25$--27\%) across
+every angle: a single timestep carries insufficient accumulated spike information for any confident
+decision, correct or otherwise. Real W-shaped structure appears only by $T' = 10$, and is nearly
+indistinguishable from the full $T' = 50$ curve by $T' = 20$. This is mechanistically sensible: with
+all 7 layers spiking, every layer including the first needs several timesteps to integrate enough
+input spikes to pass a meaningful signal onward, and this startup delay compounds across all 7
+layers.
+
+\subsection{Alternating: Partial Signal Already at $T' = 1$}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed0/alternating_seed0_5.7_temporal_evolution.png}
+\caption{\Alternating, seed 0 --- accuracy vs.\ angle at $T' = 1, 5, 10, 20, 50$.
+\texttt{alternating\_seed0/alternating\_seed0\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed1/alternating_seed1_5.7_temporal_evolution.png}
+\caption{\Alternating, seed 1.
+\texttt{alternating\_seed1/alternating\_seed1\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed2/alternating_seed2_5.7_temporal_evolution.png}
+\caption{\Alternating, seed 2.
+\texttt{alternating\_seed2/alternating\_seed2\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\FloatBarrier
+
+Unlike \FullSpiking, \Alternating's $T' = 1$ curve is not flat: it shows a weak but genuine W-shape,
+oscillating roughly between 25\% and 50--70\% (seed- and angle-dependent), tracking the peaks and
+troughs of the full-$T$ curve well below its absolute accuracy. This is architecturally sensible:
+with layers 1, 3, 5, 7 analog, the network has several ``instant'' processing stages interleaved with
+the spiking ones, so even one timestep of spiking input still passes through enough analog
+processing to carry rotation-relevant signal to the output.
+
+\subsection{Hybrid Late: Nearly Full Structure Already at $T' = 1$}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed0/hybrid_late_seed0_5.7_temporal_evolution.png}
+\caption{\HybridLate, seed 0 --- accuracy vs.\ angle at $T' = 1, 5, 10, 20, 50$.
+\texttt{hybrid\_late\_seed0/hybrid\_late\_seed0\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed1/hybrid_late_seed1_5.7_temporal_evolution.png}
+\caption{\HybridLate, seed 1.
+\texttt{hybrid\_late\_seed1/hybrid\_late\_seed1\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed2/hybrid_late_seed2_5.7_temporal_evolution.png}
+\caption{\HybridLate, seed 2.
+\texttt{hybrid\_late\_seed2/hybrid\_late\_seed2\_5.7\_temporal\_evolution.png}}
+\end{figure}
+
+\FloatBarrier
+
+\HybridLate\ goes further still: its $T' = 1$ curve already closely tracks the shape of the full
+$T' = 50$ curve, oscillating between roughly 63\% and 99\% --- most of the way to final performance
+using a single timestep. This is the expected extreme of the same pattern: with only layer 6
+spiking, six of the seven layers are instantaneous analog processing, so the vast majority of the
+network's rotation-relevant computation is available regardless of the number of spiking timesteps
+allowed.
+
+\subsection{A Clean, Reproducible Ordering, and a Compute-Budget Implication}
+
+Combining Sections 6.1--6.3 gives a consistent, monotonic ordering across all three seeds of every
+configuration: the more layers that spike, the more timesteps the network needs before its
+rotation-robust accuracy structure appears. \FullSpiking\ (7/7 spiking) needs the most accumulation
+time, starting from true chance at $T' = 1$; \Alternating\ (3/7) needs less, starting from a partial
+signal; \HybridLate\ (1/7) needs almost none, starting from a strong signal already at $T' = 1$. This
+ordering is exactly what one would predict from counting the number of spiking ``bottleneck'' stages
+a signal must pass through before reaching the classifier, and it held identically in every one of
+the nine seed-runs examined (3 configurations $\times$ 3 seeds).
+
+\paragraph{Observation 4 (Compute-budget implication).} \textit{For every configuration, $T' = 5$ is
+already close to the $T' = 50$ curve, and $T' = 10$ is nearly indistinguishable from it. Since all
+models here were trained and evaluated with the full $T = 50$ throughout, $T = 50$ may be
+substantially more compute than necessary. Future training runs --- in particular the still-pending
+\HybridEarly\ / \HybridMid\ configurations, and any controlled ablation of the original report's
+$T = 30$ setting (Section~\ref{sec:limitations}) --- could plausibly use a much lower $T$ without
+materially changing outcomes, at meaningful savings in GPU wall-clock time.}
+
+\section{Finding 4 --- Direct Equivariance Error (Experiment 5.8)}
+\label{sec:finding4}
+
+This section covers Experiment 5.8, the direct ground-truth measurement defined in Eq.~\ref{eq:3}
+(Section 2.7): $\| f(R_\theta x) - f(x) \| / \| f(x) \|$, computed directly from the network's final
+output, with no representation-similarity proxy involved. Unlike Sections~\ref{sec:finding1}--\ref{sec:finding3},
+which examine internal layers, this is the most literal possible test of ``does rotating the input
+change the answer.''
+
+\subsection{The Expected Sawtooth, Confirmed in Every Configuration}
+
+As explained in Section 2.7, the $p4$-equivariant architecture guarantees exact (0-error) invariance
+only at the four group angles $\{0^\circ, 90^\circ, 180^\circ, 270^\circ\}$, with no guarantee
+elsewhere. Every plot below confirms this precisely: equivariance error touches (or comes extremely
+close to) 0 at exactly the four group angles in every configuration and every seed, and rises to a
+local maximum roughly halfway between consecutive group angles (near
+$45^\circ, 135^\circ, 225^\circ, 315^\circ$), producing a repeating sawtooth of period $90^\circ$.
+This is exactly the behaviour the architecture's mathematical guarantees predict, and its clean
+appearance in all twelve seed-runs shown here (4 configurations $\times$ 3 seeds) is a strong sanity
+check that the \texttt{P4BatchNorm2d} equivariance fix (Section~\ref{sec:arch}) is functioning
+correctly in fully trained models, not merely in isolated unit tests.
+
+\paragraph{Analog}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed0/analog_seed0_5.8_equivariance_error.png}
+\caption{\Analog, seed 0 --- equivariance error vs.\ angle.
+\texttt{analog\_seed0/analog\_seed0\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed1/analog_seed1_5.8_equivariance_error.png}
+\caption{\Analog, seed 1.
+\texttt{analog\_seed1/analog\_seed1\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{analog_seed2/analog_seed2_5.8_equivariance_error.png}
+\caption{\Analog, seed 2.
+\texttt{analog\_seed2/analog\_seed2\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\FloatBarrier
+\paragraph{Alternating}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed0/alternating_seed0_5.8_equivariance_error.png}
+\caption{\Alternating, seed 0.
+\texttt{alternating\_seed0/alternating\_seed0\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed1/alternating_seed1_5.8_equivariance_error.png}
+\caption{\Alternating, seed 1.
+\texttt{alternating\_seed1/alternating\_seed1\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{alternating_seed2/alternating_seed2_5.8_equivariance_error.png}
+\caption{\Alternating, seed 2.
+\texttt{alternating\_seed2/alternating\_seed2\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\FloatBarrier
+\paragraph{Full Spiking}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed0/full_seed0_5.8_equivariance_error.png}
+\caption{\FullSpiking, seed 0.
+\texttt{full\_seed0/full\_seed0\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed1/full_seed1_5.8_equivariance_error.png}
+\caption{\FullSpiking, seed 1.
+\texttt{full\_seed1/full\_seed1\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{full_seed2/full_seed2_5.8_equivariance_error.png}
+\caption{\FullSpiking, seed 2.
+\texttt{full\_seed2/full\_seed2\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\FloatBarrier
+\paragraph{Hybrid Late}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed0/hybrid_late_seed0_5.8_equivariance_error.png}
+\caption{\HybridLate, seed 0.
+\texttt{hybrid\_late\_seed0/hybrid\_late\_seed0\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed1/hybrid_late_seed1_5.8_equivariance_error.png}
+\caption{\HybridLate, seed 1.
+\texttt{hybrid\_late\_seed1/hybrid\_late\_seed1\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{hybrid_late_seed2/hybrid_late_seed2_5.8_equivariance_error.png}
+\caption{\HybridLate, seed 2.
+\texttt{hybrid\_late\_seed2/hybrid\_late\_seed2\_5.8\_equivariance\_error.png}}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Peak Magnitude Does Not Scale Monotonically with Spiking Extent}
+
+If spiking dynamics simply degraded invariance in proportion to how many layers spike, the sawtooth
+peak height (worst-case equivariance error, near
+$45^\circ, 135^\circ, 225^\circ, 315^\circ$) should increase monotonically from \Analog\ (0 spiking
+layers) through \HybridLate\ (1) through \Alternating\ (3) through \FullSpiking\ (7). The data does
+not show this.
+
+\Analog\ --- the zero-spiking control --- has the \emph{highest} peak error of all four
+configurations, and \FullSpiking\ --- the maximal-spiking configuration --- has the \emph{lowest}.
+This is the opposite of the naive ``spiking hurts invariance'' expectation, and is reported here as
+an open, reproducible observation rather than an explained result. A plausible but unconfirmed
+reading is that the stochastic, rate-coded nature of spiking input, combined with surrogate-gradient
+training, may act as an implicit regularizer that reduces the network's worst-case output sensitivity
+at the hardest angles, even though (per Finding 1) internal representations are not becoming more
+similar by any of the similarity metrics measured. No experiment run so far isolates \emph{why} this
+ordering holds.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Configuration} & \textbf{Spiking layers} & \textbf{Approx. peak equivariance error (mean over seeds)} \\
+\midrule
+\Analog & 0/7 & $\sim 0.58$--0.59 (highest) \\
+\Alternating & 3/7 & $\sim 0.50$--0.60 \\
+\HybridLate & 1/7 & $\sim 0.35$--0.40 \\
+\FullSpiking & 7/7 & $\sim 0.33$--0.42 (lowest) \\
+\bottomrule
+\end{tabular}
+\caption{Approximate peak equivariance error by configuration, averaged over seeds.}
+\label{tab:peakerr}
+\end{table}
+
+\subsection{Interpretation Together with Finding 1}
+
+Findings 1 and 4 combine into a genuinely interesting, mildly paradoxical picture. Finding 1 showed
+internal representation similarity to the upright case degrades similarly across all four
+configurations, bottoming out at layers 6--7 regardless of spiking extent. Finding 4 shows that the
+output-level equivariance error not only differs meaningfully between configurations, but differs in
+the opposite direction from a naive ``more spiking $\Rightarrow$ worse invariance'' prediction.
+Together this means that whatever occurs in the last two layers causing representational drift does
+not translate linearly into output error, and spike placement affects the classifier's output-level
+behaviour in a way that is not visible from intermediate-layer similarity metrics alone. This is a
+concrete argument, for the eventual paper, that both a representation-level analysis (Findings 1--3)
+and a direct output-level analysis (Finding 4) are necessary --- research-plan Sections 4 and 5.8
+together, neither alone tells the full story.
+
+\section{Synthesis}
+\label{sec:synthesis}
+
+The four findings above were run somewhat independently but tell one coherent story when read
+together.
+
+\subsection{The Story in Five Statements}
+
+\begin{enumerate}[leftmargin=1.8em]
+\item \textbf{Accuracy alone says almost nothing.} Once training is done properly
+(\texttt{P4BatchNorm2d} fix, 20 epochs, $T = 50$, 3 seeds; Section~\ref{sec:setup}), all four
+configurations reach nearly identical rotation-accuracy curves regardless of how many layers spike,
+and the dramatic differences reported earlier were artifacts of the uncorrected setup, not real
+properties of spike placement.
+\item \textbf{But representation-level analysis (Finding 1) shows the network is not internally
+doing the same thing in every configuration.} There is a real, consistent structural pattern ---
+invariance holding through layers 1--5, breaking down at 6--7 --- present in all configurations,
+including the non-spiking one. This makes it an architectural signature of the $p4$-CNN design, not
+a spiking signature.
+\item \textbf{Individual-neuron analysis (Finding 2) shows spike placement leaves a fingerprint in
+the \emph{shape} of how sensitivity builds up across depth} --- \Alternating\ shows a sharp late-layer
+spike, \FullSpiking\ and \Analog\ show a smooth full-depth climb, \HybridLate\ is nearly flat --- even
+though the endpoint (layer 7 most sensitive) is common to all. Temporal integration within a layer,
+however, does not smooth sensitivity out over time as research-plan Section 9.4 hypothesized;
+sensitivity is set within the first few timesteps and then plateaus.
+\item \textbf{How quickly rotation-robust accuracy becomes available over spiking time (Finding 3)
+scales cleanly and reproducibly with the number of spiking layers} --- more spiking layers means a
+longer ``warm-up'' before the W-shaped accuracy curve emerges. This is a clean, mechanistically
+explainable result the original report never surfaced, since it never varied $T$ at fixed, correctly
+trained models.
+\item \textbf{The direct output-level measurement (Finding 4) delivers the most surprising result:}
+peak equivariance error is \emph{not} monotonic in the amount of spiking --- \Analog\ has the worst
+peak error, \FullSpiking\ the best --- the opposite of a naive ``spiking hurts invariance'' story,
+and unexplained pending further work.
+\end{enumerate}
+
+\begin{keypoint}
+Spike dynamics in this architecture do not determine \emph{whether} rotation-invariant
+representations form --- the $p4$-equivariant architecture and its final layers do that, uniformly,
+regardless of spiking --- but spike placement does measurably shape \emph{how} that invariance is
+approached, both in depth (the per-neuron sensitivity profile across layers) and in time (how many
+timesteps are needed before rotation-robust accuracy appears), and, unexpectedly, does not
+straightforwardly worsen the network's final output-level equivariance error as spiking is added.
+\end{keypoint}
+
+\subsection{Relation to the Research Plan's Theoretical Program}
+
+Research-plan Section 9 proposes a theoretical chain,
+\[
+\text{Equivariant Spatial Layers} \implies \text{Equivariant Spike Dynamics} \implies
+\text{Equivariant Spike Counts} \implies \text{Invariant Classifier},
+\]
+together with a contraction hypothesis $d_{t+1} \leq \beta d_t$ (Section 9.5 of the research plan)
+explaining temporal stabilization. Finding 2 (Section~\ref{sec:54}) provides direct empirical evidence
+against the contraction hypothesis as stated: $\mathcal{R}_i(t)$ does not decrease with $t$ in any
+configuration tested; it plateaus. This does not invalidate the broader equivariance chain ---
+Finding 4's clean sawtooth pattern in every configuration is consistent with the final ``Invariant
+Classifier'' link of the chain holding at the group angles --- but it does mean any future
+theoretical account (research-plan Sections 9.4--9.5) needs to explain a plateau, not a decay, and
+should treat the observed non-monotonic relationship between spiking extent and peak equivariance
+error (Finding 4) as a phenomenon requiring its own explanation, separate from the temporal-averaging
+story.
+
+\subsection{Relation to Kim et al.\ (2022)}
+
+Kim et al., ``Exploring Temporal Information Dynamics in Spiking Neural Networks'' (NeurIPS 2022),
+report a structurally similar decoupling in an unrelated task: their Temporal Information
+Concentration (TIC) finding is that Fisher Information about the input concentrates into early
+timesteps as training progresses, affecting robustness metrics but not final accuracy. This is the
+same qualitative shape as the central finding of this report --- representation/robustness-level
+metrics differentiate configurations meaningfully while final accuracy does not --- arrived at
+independently, in a different task and metric. This is worth citing directly in the eventual paper's
+discussion as external precedent for this kind of decoupling being a real, recurring phenomenon in
+SNN research rather than an artifact of this project's particular setup. It also suggests a concrete,
+cheap next step (Section~\ref{sec:limitations}): implementing Kim et al.'s Fisher Information trace
+$I_t$ and Information Centroid (IC) metric on the existing checkpoints, with no retraining required,
+would give a single-number summary directly comparable to their own layer-wise finding (shallow
+layers concentrate late-timestep information, deep layers concentrate early-timestep information)
+against this report's own layer-6/7 finding.
+
+\section{Limitations and Next Steps}
+\label{sec:limitations}
+
+\subsection{Limitations of This Analysis}
+
+\begin{itemize}[leftmargin=1.5em]
+\item Only 2 of the 5 spike-placement configurations from the original report's comparison have
+multi-seed representation analysis alongside \Analog, \Alternating, and \FullSpiking. \HybridEarly\
+and \HybridMid\ have not been trained under the corrected setup, so this report says nothing about
+them.
+\item No controlled ablation has isolated which of the three candidate factors (\texttt{P4BatchNorm2d}
+fix, longer training, higher $T$) is responsible for the original report's dramatic findings not
+replicating; all three changed simultaneously between the old and new setups.
+\item The counter-intuitive Finding 4 result (\Analog\ worst peak equivariance error, \FullSpiking\
+best) has no mechanistic explanation yet; it is reported as an observed, reproducible pattern, not a
+settled cause-and-effect claim.
+\item SVCCA values should not be read as an absolute 0-to-1 similarity scale (Section~\ref{sec:repsim})
+--- the noise floor at the batch sizes used here is $\sim 0.2$--0.4.
+\item $\mathcal{R}_i$'s absolute scale is not comparable across spiking vs.\ analog activation types
+(Section~\ref{sec:finding2}); only within-configuration comparisons across layers or seeds are on
+safe footing.
+\item All results use a single fixed task (4-class rotated MNIST, digits 3/4/8/9); generalization to
+the full 10-class task or other datasets is untested.
+\end{itemize}
+
+\subsection{Recommended Next Steps, in Priority Order}
+
+\begin{enumerate}[leftmargin=1.8em]
+\item Train \HybridEarly\ and \HybridMid\ under the corrected setup, and extend Findings 1--4 to
+include them, completing the original report's full 5-configuration picture.
+\item Run the controlled ablation reproducing the original report's 5-epoch/$T = 30$/CPU regime
+inside the corrected codebase, to isolate which factor drove the non-replication of the original
+report's two dramatic findings.
+\item Implement the Kim et al.\ Fisher Information trace $I_t$ and Information Centroid metric on
+existing checkpoints (cheap, no retraining) as a precise complement to Finding 3, and cite Kim et
+al.\ directly in the paper's discussion (Section~\ref{sec:synthesis}).
+\item Given Finding 3's compute-budget observation ($T' = 10$ already nearly matches $T' = 50$ for
+every configuration tested), consider reducing $T$ for the remaining \HybridEarly/\HybridMid\
+training runs and the ablation study above, to save GPU time on \texttt{gpuserver}.
+\item Cheap, scoped additions when time allows: latent trajectory PCA plots ($0^\circ$ vs.\
+$90^\circ$ paths through $h_\ell(t, x)$) using the existing temporal-representation extraction
+infrastructure with no retraining; a narrowly scoped check of whether surrogate-gradient training
+keeps the equivariant weight tensor's gradients consistent under rotation (research-plan Section
+9.1).
+\item Update the standalone internship report to incorporate this multi-seed representation analysis
+in place of the earlier seed-0-only version, and fold in the Kim et al.\ discussion once Step 3 is
+complete.
+\end{enumerate}
+
+\subsection{Explicitly Deprioritized (Not Recommended Before the Deadline)}
+
+\begin{itemize}[leftmargin=1.5em]
+\item Full PLIF (learnable membrane decay, research-plan Section 5.6) retraining across all
+configurations --- real and cheap to add to the codebase, but requires retraining every
+configuration again.
+\item DVS/N-MNIST spatio-temporal group equivariance extension --- a substantially larger, separate
+project requiring a new dataset, new encoding, and new group-theoretic construction; not realistic
+before the ICLR abstract/full-paper deadlines.
+\item Full gated-recurrent-cell (GRU/LSTM-style) architecture extension combined with
+$p4$-equivariance --- genuinely novel but a multi-week undertaking requiring the same
+equivariance-verification rigor as the \texttt{P4BatchNorm2d} fix.
+\item Rotation-aware pruning (research-plan Section 5.5), learnable-threshold experiments beyond
+PLIF, a reduced-parameter-count architecture variant, and the 10-class task extension --- all
+previously proposed, none run, all lower priority than completing the core 5-configuration
+comparison.
+\end{itemize}
+
+\end{document}
