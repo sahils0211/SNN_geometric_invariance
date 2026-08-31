@@ -1,6 +1,6 @@
 # SNN Geometric Invariance
 
-Research code for studying rotation invariance in spiking neural networks (SNNs) using p4-equivariant group CNNs. This project targets an ICLR-style investigation of how architectural equivariance and spiking configurations affect accuracy, rotation robustness, temporal behavior, and internal representations.
+Research code for studying rotation invariance in spiking neural networks (SNNs) using p4-equivariant group CNNs. This project targets investigation of how architectural equivariance and spiking configurations affect accuracy, rotation robustness, temporal behavior, and internal representations.
 
 The work implements the research plan of Prof. K. V. Subrahmanyam.
 
